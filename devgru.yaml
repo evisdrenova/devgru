@@ -1,4 +1,4 @@
-# Multi-Agent Consensus Configuration
+# devgru.yaml - Multi-Agent Consensus Configuration
 # This file defines providers, workers, judges, and consensus settings
 
 # Provider configurations
@@ -16,16 +16,6 @@ providers:
     model: gpt-4o
     base_url: https://api.openai.com/v1
 
-  anthropic:
-    kind: anthropic
-    model: claude-3-sonnet-20240229
-    base_url: https://api.anthropic.com
-
-  ollama:
-    kind: ollama
-    model: mistral:latest
-    host: http://localhost:11434
-
 # Worker configurations - these are the LLMs that will answer your prompts
 workers:
   - id: gpt4-mini-creative
@@ -40,18 +30,7 @@ workers:
     max_tokens: 2048
     system_prompt: "You are an analytical assistant focused on accuracy and logic."
 
-  - id: claude-balanced
-    provider: anthropic
-    temperature: 0.5
-    max_tokens: 2048
-    system_prompt: "You are a balanced assistant providing comprehensive responses."
-
-  - id: mistral-local
-    provider: ollama
-    temperature: 0.7
-    max_tokens: 2048
-
-# Judge configurations - these evaluate worker responses
+# Judge configurations - these evaluate worker responses (not yet implemented)
 judges:
   - id: gpt4-judge
     provider: openai-gpt4
@@ -66,22 +45,14 @@ judges:
       Respond ONLY with valid JSON in this format:
       {"score": <integer 0-10>, "reason": "<brief explanation>"}
 
-  - id: claude-judge
-    provider: anthropic
-    system_prompt: |
-      Evaluate the given response for quality and accuracy.
-      Consider factual correctness, clarity, and usefulness.
-
-      Return only JSON: {"score": <0-10>, "reason": "<explanation>"}
-
 # Consensus algorithm configuration
 consensus:
   # Available algorithms:
-  # - majority: Simple majority vote (fastest)
-  # - score_top1: Use judges to score responses, pick highest
-  # - embedding_cluster: Group similar responses, pick largest cluster
-  # - referee: Use an LLM to pick the best response
-  algorithm: score_top1
+  # - majority: Simple majority vote (currently just picks first successful response)
+  # - score_top1: Use judges to score responses, pick highest (TODO)
+  # - embedding_cluster: Group similar responses, pick largest cluster (TODO)
+  # - referee: Use an LLM to pick the best response (TODO)
+  algorithm: majority
 
   # Minimum score required for score_top1 algorithm
   min_score: 6
@@ -92,8 +63,8 @@ consensus:
 # Cache configuration
 cache:
   # Directory to store cached responses
-  # Defaults to ~/.poly/cache if not specified
-  dir: ~/.poly/cache
+  # Defaults to ~/.devgru/cache if not specified
+  dir: ~/.devgru/cache
 
   # Enable/disable caching (useful for debugging)
   enabled: true
@@ -103,10 +74,10 @@ logging:
   # Log levels: debug, info, warn, error
   level: info
 # Example environment variable usage:
-# You can override any config value using POLY_ prefixed env vars:
+# You can override any config value using DEVGRU_ prefixed env vars:
 #
-# POLY_PROVIDERS_OPENAI_MODEL=gpt-4o
-# POLY_CONSENSUS_ALGORITHM=majority
-# POLY_LOGGING_LEVEL=debug
+# DEVGRU_PROVIDERS_OPENAI_MODEL=gpt-4o
+# DEVGRU_CONSENSUS_ALGORITHM=majority
+# DEVGRU_LOGGING_LEVEL=debug
 #
 # The structure follows the YAML hierarchy with dots as separators.
