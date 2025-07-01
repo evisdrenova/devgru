@@ -1,0 +1,112 @@
+# Multi-Agent Consensus Configuration
+# This file defines providers, workers, judges, and consensus settings
+
+# Provider configurations
+# API keys are automatically injected from environment variables:
+# - OPENAI_API_KEY for OpenAI providers
+# - ANTHROPIC_API_KEY for Anthropic providers
+providers:
+  openai:
+    kind: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+
+  openai-gpt4:
+    kind: openai
+    model: gpt-4o
+    base_url: https://api.openai.com/v1
+
+  anthropic:
+    kind: anthropic
+    model: claude-3-sonnet-20240229
+    base_url: https://api.anthropic.com
+
+  ollama:
+    kind: ollama
+    model: mistral:latest
+    host: http://localhost:11434
+
+# Worker configurations - these are the LLMs that will answer your prompts
+workers:
+  - id: gpt4-mini-creative
+    provider: openai
+    temperature: 0.8
+    max_tokens: 2048
+    system_prompt: "You are a creative and thoughtful assistant."
+
+  - id: gpt4-analytical
+    provider: openai-gpt4
+    temperature: 0.2
+    max_tokens: 2048
+    system_prompt: "You are an analytical assistant focused on accuracy and logic."
+
+  - id: claude-balanced
+    provider: anthropic
+    temperature: 0.5
+    max_tokens: 2048
+    system_prompt: "You are a balanced assistant providing comprehensive responses."
+
+  - id: mistral-local
+    provider: ollama
+    temperature: 0.7
+    max_tokens: 2048
+
+# Judge configurations - these evaluate worker responses
+judges:
+  - id: gpt4-judge
+    provider: openai-gpt4
+    system_prompt: |
+      You are evaluating LLM responses for a consensus system.
+      Grade each answer on a scale of 0-10 considering:
+      - Accuracy of information
+      - Clarity of explanation
+      - Completeness of answer
+      - Helpfulness to the user
+
+      Respond ONLY with valid JSON in this format:
+      {"score": <integer 0-10>, "reason": "<brief explanation>"}
+
+  - id: claude-judge
+    provider: anthropic
+    system_prompt: |
+      Evaluate the given response for quality and accuracy.
+      Consider factual correctness, clarity, and usefulness.
+
+      Return only JSON: {"score": <0-10>, "reason": "<explanation>"}
+
+# Consensus algorithm configuration
+consensus:
+  # Available algorithms:
+  # - majority: Simple majority vote (fastest)
+  # - score_top1: Use judges to score responses, pick highest
+  # - embedding_cluster: Group similar responses, pick largest cluster
+  # - referee: Use an LLM to pick the best response
+  algorithm: score_top1
+
+  # Minimum score required for score_top1 algorithm
+  min_score: 6
+
+  # Maximum time to wait for all workers/judges
+  timeout: 45s
+
+# Cache configuration
+cache:
+  # Directory to store cached responses
+  # Defaults to ~/.poly/cache if not specified
+  dir: ~/.poly/cache
+
+  # Enable/disable caching (useful for debugging)
+  enabled: true
+
+# Logging configuration
+logging:
+  # Log levels: debug, info, warn, error
+  level: info
+# Example environment variable usage:
+# You can override any config value using POLY_ prefixed env vars:
+#
+# POLY_PROVIDERS_OPENAI_MODEL=gpt-4o
+# POLY_CONSENSUS_ALGORITHM=majority
+# POLY_LOGGING_LEVEL=debug
+#
+# The structure follows the YAML hierarchy with dots as separators.
