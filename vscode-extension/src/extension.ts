@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import * as WebSocket from "ws";
+import WebSocket from "ws";
 import * as path from "path";
 
 interface DevGruMessage {
@@ -71,21 +71,41 @@ export function activate(context: vscode.ExtensionContext) {
     devgruClient.handleDiagnosticsChange(e);
   });
 
-  // Watch for DevGru handshake in terminal
-  const terminalListener = vscode.window.onDidWriteTerminalData((e) => {
-    devgruClient.handleTerminalOutput(e.data);
-  });
+  // Watch for DevGru handshake in terminal output
+  // Note: onDidWriteTerminalData is not available in all VS Code versions
+  // We'll use a different approach to detect handshake
+  let terminalListener: vscode.Disposable | undefined;
+
+  try {
+    // Try to use the newer API if available
+    if ("onDidWriteTerminalData" in vscode.window) {
+      const onDidWriteTerminalData = (vscode.window as any)
+        .onDidWriteTerminalData;
+      terminalListener = onDidWriteTerminalData((e: any) => {
+        devgruClient.handleTerminalOutput(e.data);
+      });
+    }
+  } catch (error) {
+    console.log(
+      "Terminal output monitoring not available in this VS Code version"
+    );
+  }
 
   // Register disposables
-  context.subscriptions.push(
+  const disposables = [
     openPanelCommand,
     insertFileRefCommand,
     runPromptCommand,
     selectionListener,
     diagnosticListener,
-    terminalListener,
-    devgruClient
-  );
+    devgruClient,
+  ];
+
+  if (terminalListener) {
+    disposables.push(terminalListener);
+  }
+
+  context.subscriptions.push(...disposables);
 
   // Auto-connect if enabled
   const config = vscode.workspace.getConfiguration("devgru");
