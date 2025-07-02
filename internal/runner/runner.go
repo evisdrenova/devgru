@@ -6,10 +6,11 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/evisdrenova/devgru/internal/config"
 	"github.com/evisdrenova/devgru/internal/provider"
 	"github.com/evisdrenova/devgru/internal/provider/factories"
-	"golang.org/x/sync/errgroup"
 )
 
 // Runner orchestrates multiple workers to process prompts
@@ -200,12 +201,32 @@ func (r *Runner) runSingleWorker(ctx context.Context, worker config.Worker, prom
 	result.Error = collector.Error
 	result.Stats = collector.Stats
 
+	// If we don't have token usage from the API, estimate it
+	if result.TokensUsed == nil && result.Error == nil && result.Content != "" {
+		promptTokens := prov.EstimateTokens(prompt + opts.SystemPrompt)
+		completionTokens := prov.EstimateTokens(result.Content)
+
+		result.TokensUsed = &provider.TokenUsage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      promptTokens + completionTokens,
+		}
+	}
+
 	// Update stats with provider info
 	if result.Stats != nil {
 		result.Stats.Provider = prov.GetName()
 		result.Stats.Model = prov.GetModel()
+		if result.TokensUsed != nil {
+			result.Stats.TokensUsed = result.TokensUsed
+		}
 	} else {
 		result.Stats = stats
+		result.Stats.Provider = prov.GetName()
+		result.Stats.Model = prov.GetModel()
+		if result.TokensUsed != nil {
+			result.Stats.TokensUsed = result.TokensUsed
+		}
 	}
 
 	// Calculate estimated cost

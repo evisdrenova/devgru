@@ -75,10 +75,42 @@ func (c *Client) GetModel() string {
 	return c.model
 }
 
-// EstimateTokens provides a rough token estimate
+// EstimateTokens provides a more accurate token estimate for OpenAI models
 func (c *Client) EstimateTokens(text string) int {
-	// More sophisticated estimation could use tiktoken-go
-	return provider.EstimateTokensSimple(text)
+	// More sophisticated estimation for OpenAI models
+	// GPT tokenizers roughly follow these patterns:
+	// - 1 token ≈ 3.5-4 characters for English text
+	// - Words are often split into multiple tokens
+	// - Punctuation and spaces add tokens
+
+	if text == "" {
+		return 0
+	}
+
+	// Count words and characters
+	words := len(strings.Fields(text))
+	chars := len(text)
+
+	// Estimate based on character count (more conservative)
+	charBasedEstimate := chars / 3
+
+	// Estimate based on word count (words often split into 1.3 tokens on average)
+	wordBasedEstimate := int(float64(words) * 1.3)
+
+	// Use the higher estimate to be more conservative
+	estimate := charBasedEstimate
+	if wordBasedEstimate > estimate {
+		estimate = wordBasedEstimate
+	}
+
+	// Add some padding for punctuation and formatting
+	estimate = int(float64(estimate) * 1.1)
+
+	if estimate < 1 {
+		estimate = 1
+	}
+
+	return estimate
 }
 
 // Close cleans up resources
@@ -174,6 +206,13 @@ func (c *Client) buildRequestBody(prompt string, opts provider.Options) map[stri
 		"stream":      opts.Stream,
 	}
 
+	// Add stream_options to get usage data in streaming mode
+	if opts.Stream {
+		reqBody["stream_options"] = map[string]interface{}{
+			"include_usage": true,
+		}
+	}
+
 	if opts.MaxTokens > 0 {
 		reqBody["max_tokens"] = opts.MaxTokens
 	}
@@ -185,12 +224,33 @@ func (c *Client) buildRequestBody(prompt string, opts provider.Options) map[stri
 func (c *Client) handleStreamingResponse(body io.Reader, responseChan chan<- provider.Response) {
 	scanner := bufio.NewScanner(body)
 	var totalTokens *provider.TokenUsage
+	var contentBuilder strings.Builder
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
-		if line == "" || line == "data: [DONE]" {
+		if line == "" {
 			continue
+		}
+
+		if line == "data: [DONE]" {
+			// Final chunk - estimate tokens if we don't have usage data
+			if totalTokens == nil {
+				content := contentBuilder.String()
+				estimatedTotal := c.EstimateTokens(content)
+				totalTokens = &provider.TokenUsage{
+					PromptTokens:     estimatedTotal / 4, // Rough estimate: prompt is ~1/4 of total
+					CompletionTokens: (estimatedTotal * 3) / 4,
+					TotalTokens:      estimatedTotal,
+				}
+			}
+
+			responseChan <- provider.Response{
+				Delta:      "",
+				Done:       true,
+				TokensUsed: totalTokens,
+			}
+			return
 		}
 
 		if !strings.HasPrefix(line, "data: ") {
@@ -209,8 +269,9 @@ func (c *Client) handleStreamingResponse(body io.Reader, responseChan chan<- pro
 		if len(chunk.Choices) > 0 {
 			choice := chunk.Choices[0]
 
-			// Send content delta
+			// Send content delta and accumulate content
 			if choice.Delta.Content != "" {
+				contentBuilder.WriteString(choice.Delta.Content)
 				responseChan <- provider.Response{
 					Delta: choice.Delta.Content,
 					Done:  false,
@@ -219,7 +280,7 @@ func (c *Client) handleStreamingResponse(body io.Reader, responseChan chan<- pro
 
 			// Check for completion
 			if choice.FinishReason != nil {
-				// This is the final chunk, get usage info
+				// This is the final chunk, try to get usage info
 				if chunk.Usage != nil {
 					totalTokens = &provider.TokenUsage{
 						PromptTokens:     chunk.Usage.PromptTokens,
@@ -227,15 +288,26 @@ func (c *Client) handleStreamingResponse(body io.Reader, responseChan chan<- pro
 						TotalTokens:      chunk.Usage.TotalTokens,
 					}
 				}
-
-				responseChan <- provider.Response{
-					Delta:      "",
-					Done:       true,
-					TokensUsed: totalTokens,
-				}
-				return
+				// Don't return here - wait for [DONE] message
 			}
 		}
+	}
+
+	// If we exit the loop without seeing [DONE], still send final response
+	if totalTokens == nil {
+		content := contentBuilder.String()
+		estimatedTotal := c.EstimateTokens(content)
+		totalTokens = &provider.TokenUsage{
+			PromptTokens:     estimatedTotal / 4,
+			CompletionTokens: (estimatedTotal * 3) / 4,
+			TotalTokens:      estimatedTotal,
+		}
+	}
+
+	responseChan <- provider.Response{
+		Delta:      "",
+		Done:       true,
+		TokensUsed: totalTokens,
 	}
 
 	if err := scanner.Err(); err != nil {
