@@ -7,8 +7,11 @@ import (
 	"os"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/evisdrenova/devgru/internal/config"
 	"github.com/evisdrenova/devgru/internal/runner"
+	"github.com/evisdrenova/devgru/ui"
 )
 
 func main() {
@@ -16,6 +19,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: %s <command> [args...]\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nCommands:\n")
 		fmt.Fprintf(os.Stderr, "  run <prompt>     Run a prompt through all workers\n")
+		fmt.Fprintf(os.Stderr, "  run --raw <prompt>  Run with raw JSON output\n")
 		fmt.Fprintf(os.Stderr, "  version          Show version information\n")
 		os.Exit(1)
 	}
@@ -34,12 +38,25 @@ func main() {
 }
 
 func runCommand(args []string) {
+	var rawOutput bool
+	var prompt string
+
+	// Parse flags
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: devgru run <prompt>\n")
+		fmt.Fprintf(os.Stderr, "Usage: devgru run [--raw] <prompt>\n")
 		os.Exit(1)
 	}
 
-	prompt := args[0]
+	if args[0] == "--raw" {
+		rawOutput = true
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Usage: devgru run --raw <prompt>\n")
+			os.Exit(1)
+		}
+		prompt = args[1]
+	} else {
+		prompt = args[0]
+	}
 
 	// Load configuration
 	cfg, err := config.LoadDefault()
@@ -61,8 +78,10 @@ func runCommand(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Consensus.Timeout+10*time.Second)
 	defer cancel()
 
-	fmt.Printf("Running prompt: %q\n", prompt)
-	fmt.Printf("Workers: %d, Algorithm: %s\n\n", len(cfg.Workers), cfg.Consensus.Algorithm)
+	if !rawOutput {
+		fmt.Printf("Running prompt: %q\n", prompt)
+		fmt.Printf("Workers: %d, Algorithm: %s\n\n", len(cfg.Workers), cfg.Consensus.Algorithm)
+	}
 
 	// Execute the run
 	result, err := r.Run(ctx, prompt)
@@ -72,10 +91,23 @@ func runCommand(args []string) {
 	}
 
 	// Display results
-	displayResults(result)
+	if rawOutput {
+		rawOutputCommand(result)
+	} else {
+		// Use the TUI for interactive display
+		model := ui.NewResultsModel(result)
+		p := tea.NewProgram(model, tea.WithAltScreen())
+
+		if _, err := p.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
+			// Fallback to simple display
+			displayResultsSimple(result)
+			os.Exit(1)
+		}
+	}
 }
 
-func displayResults(result *runner.RunResult) {
+func displayResultsSimple(result *runner.RunResult) {
 	fmt.Printf("=== RESULTS ===\n")
 	fmt.Printf("Duration: %v\n", result.TotalDuration)
 	fmt.Printf("Total Tokens: %d\n", result.TotalTokens)
