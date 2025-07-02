@@ -13,6 +13,7 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
+// Config represents the complete poly configuration
 type Config struct {
 	Providers map[string]Provider `koanf:"providers"`
 	Workers   []Worker            `koanf:"workers"`
@@ -20,6 +21,7 @@ type Config struct {
 	Consensus Consensus           `koanf:"consensus"`
 	Cache     Cache               `koanf:"cache"`
 	Logging   Logging             `koanf:"logging"`
+	IDE       IDE                 `koanf:"ide`
 }
 
 // Provider defines configuration for an LLM provider
@@ -60,10 +62,20 @@ type Cache struct {
 	Enabled bool   `koanf:"enabled"`
 }
 
+// Logging configuration
 type Logging struct {
 	Level string `koanf:"level"` // debug, info, warn, error
 }
 
+// IDE integration configuration
+type IDE struct {
+	Enable    bool   `koanf:"enable"`
+	Transport string `koanf:"transport"` // websocket or stdio
+	DiffTool  string `koanf:"diff_tool"` // auto, vscode, or disabled
+	Port      int    `koanf:"port"`      // WebSocket port (default: 8123)
+}
+
+// Load loads configuration from the specified file path
 func Load(configPath string) (*Config, error) {
 	k := koanf.New(".")
 
@@ -72,10 +84,10 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to load config file %s: %w", configPath, err)
 	}
 
-	// Load environment variables with devgru_ prefix
-	if err := k.Load(env.Provider("devgru_", ".", func(s string) string {
+	// Load environment variables with DEVGRU_ prefix
+	if err := k.Load(env.Provider("DEVGRU_", ".", func(s string) string {
 		return strings.Replace(strings.ToLower(
-			strings.TrimPrefix(s, "devgru_")), "_", ".", -1)
+			strings.TrimPrefix(s, "DEVGRU_")), "_", ".", -1)
 	}), nil); err != nil {
 		return nil, fmt.Errorf("failed to load environment variables: %w", err)
 	}
@@ -96,7 +108,6 @@ func Load(configPath string) (*Config, error) {
 
 // LoadDefault loads configuration from default locations
 func LoadDefault() (*Config, error) {
-
 	// Try these locations in order
 	locations := []string{
 		"devgru.yaml",
@@ -152,6 +163,17 @@ func (c *Config) setDefaults() {
 	}
 	if c.Consensus.Timeout == 0 {
 		c.Consensus.Timeout = 30 * time.Second
+	}
+
+	// IDE defaults
+	if c.IDE.Transport == "" {
+		c.IDE.Transport = "websocket"
+	}
+	if c.IDE.DiffTool == "" {
+		c.IDE.DiffTool = "auto"
+	}
+	if c.IDE.Port == 0 {
+		c.IDE.Port = 8123
 	}
 
 	// Worker defaults

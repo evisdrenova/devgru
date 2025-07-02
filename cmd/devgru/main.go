@@ -20,6 +20,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\nCommands:\n")
 		fmt.Fprintf(os.Stderr, "  run <prompt>     Run a prompt through all workers\n")
 		fmt.Fprintf(os.Stderr, "  run --raw <prompt>  Run with raw JSON output\n")
+		fmt.Fprintf(os.Stderr, "  ide <subcommand> IDE integration commands\n")
 		fmt.Fprintf(os.Stderr, "  version          Show version information\n")
 		os.Exit(1)
 	}
@@ -29,6 +30,8 @@ func main() {
 	switch command {
 	case "run":
 		runCommand(os.Args[2:])
+	case "ide":
+		ideCommand(os.Args[2:])
 	case "version":
 		versionCommand()
 	default:

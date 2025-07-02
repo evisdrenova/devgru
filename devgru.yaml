@@ -73,11 +73,26 @@ cache:
 logging:
   # Log levels: debug, info, warn, error
   level: info
+
+# IDE integration configuration (VS Code extension support)
+ide:
+  # Enable IDE integration
+  enable: true
+
+  # Transport method: websocket or stdio
+  transport: websocket
+
+  # Diff tool: auto, vscode, or disabled
+  diff_tool: auto
+
+  # WebSocket port for VS Code extension communication
+  port: 8123
 # Example environment variable usage:
 # You can override any config value using DEVGRU_ prefixed env vars:
 #
 # DEVGRU_PROVIDERS_OPENAI_MODEL=gpt-4o
 # DEVGRU_CONSENSUS_ALGORITHM=majority
 # DEVGRU_LOGGING_LEVEL=debug
+# DEVGRU_IDE_ENABLE=true
 #
 # The structure follows the YAML hierarchy with dots as separators.
