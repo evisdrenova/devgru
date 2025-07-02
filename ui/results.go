@@ -14,21 +14,27 @@ import (
 
 // ResultsModel represents the TUI for displaying run results
 type ResultsModel struct {
-	result   *runner.RunResult
-	cursor   int
-	expanded map[int]bool // Track which worker sections are expanded
-	width    int
-	height   int
-	keys     KeyMap
+	result       *runner.RunResult
+	cursor       int
+	expanded     map[int]bool // Track which worker sections are expanded
+	width        int
+	height       int
+	keys         KeyMap
+	scrollOffset int // Track vertical scroll position
+	totalHeight  int // Total height of all content
 }
 
 // KeyMap defines the key bindings
 type KeyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Expand   key.Binding
-	Collapse key.Binding
-	Quit     key.Binding
+	Up         key.Binding
+	Down       key.Binding
+	Expand     key.Binding
+	Collapse   key.Binding
+	ScrollUp   key.Binding
+	ScrollDown key.Binding
+	PageUp     key.Binding
+	PageDown   key.Binding
+	Quit       key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings
@@ -49,6 +55,22 @@ func DefaultKeyMap() KeyMap {
 		Collapse: key.NewBinding(
 			key.WithKeys("c"),
 			key.WithHelp("c", "collapse all"),
+		),
+		ScrollUp: key.NewBinding(
+			key.WithKeys("shift+up", "K"),
+			key.WithHelp("shift+↑/K", "scroll up"),
+		),
+		ScrollDown: key.NewBinding(
+			key.WithKeys("shift+down", "J"),
+			key.WithHelp("shift+↓/J", "scroll down"),
+		),
+		PageUp: key.NewBinding(
+			key.WithKeys("pgup", "ctrl+u"),
+			key.WithHelp("pgup/ctrl+u", "page up"),
+		),
+		PageDown: key.NewBinding(
+			key.WithKeys("pgdown", "ctrl+d"),
+			key.WithHelp("pgdn/ctrl+d", "page down"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
@@ -116,6 +138,32 @@ func (m *ResultsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i := range m.result.Workers {
 				m.expanded[i] = false
 			}
+
+		case key.Matches(msg, m.keys.ScrollUp):
+			if m.scrollOffset > 0 {
+				m.scrollOffset--
+			}
+
+		case key.Matches(msg, m.keys.ScrollDown):
+			maxScroll := m.totalHeight - m.height + 3 // Leave room for footer
+			if maxScroll > 0 && m.scrollOffset < maxScroll {
+				m.scrollOffset++
+			}
+
+		case key.Matches(msg, m.keys.PageUp):
+			pageSize := m.height / 3
+			m.scrollOffset -= pageSize
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
+
+		case key.Matches(msg, m.keys.PageDown):
+			pageSize := m.height / 3
+			maxScroll := m.totalHeight - m.height + 3
+			m.scrollOffset += pageSize
+			if maxScroll > 0 && m.scrollOffset > maxScroll {
+				m.scrollOffset = maxScroll
+			}
 		}
 	}
 
@@ -143,10 +191,34 @@ func (m *ResultsModel) View() string {
 		sections = append(sections, m.renderConsensus())
 	}
 
-	// Footer with help
-	sections = append(sections, m.renderFooter())
+	// Join all content
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	// Calculate total height for scrolling
+	contentLines := strings.Split(content, "\n")
+	m.totalHeight = len(contentLines)
+
+	// Apply scrolling
+	if m.scrollOffset > 0 {
+		if m.scrollOffset >= len(contentLines) {
+			contentLines = []string{}
+		} else {
+			contentLines = contentLines[m.scrollOffset:]
+		}
+	}
+
+	// Limit to viewport height (leave space for footer)
+	viewportHeight := m.height - 2 // Reserve space for footer
+	if len(contentLines) > viewportHeight {
+		contentLines = contentLines[:viewportHeight]
+	}
+
+	scrolledContent := strings.Join(contentLines, "\n")
+
+	// Add footer with help and scroll indicator
+	footer := m.renderFooter()
+
+	return lipgloss.JoinVertical(lipgloss.Left, scrolledContent, footer)
 }
 
 // renderHeader renders the summary header
@@ -285,27 +357,35 @@ func (m *ResultsModel) renderConsensus() string {
 	}
 
 	title := "🏆 CONSENSUS RESULT"
-	content := fmt.Sprintf("%s\n\n", title)
-	content += fmt.Sprintf("Algorithm: %s\n", consensus.Algorithm)
-	content += fmt.Sprintf("Winner: %s\n", consensus.Winner)
-	content += fmt.Sprintf("Confidence: %.2f\n", consensus.Confidence)
-	content += fmt.Sprintf("Participants: %d\n\n", consensus.Participants)
+	var content strings.Builder
+	content.WriteString(fmt.Sprintf("%s\n\n", title))
+
+	// Basic info
+	content.WriteString(fmt.Sprintf("Algorithm: %s\n", consensus.Algorithm))
+	content.WriteString(fmt.Sprintf("Winner: %s\n", consensus.Winner))
+	content.WriteString(fmt.Sprintf("Confidence: %.2f\n", consensus.Confidence))
+	content.WriteString(fmt.Sprintf("Participants: %d\n", consensus.Participants))
 
 	if consensus.Reasoning != "" {
-		content += fmt.Sprintf("Reasoning: %s\n\n", consensus.Reasoning)
+		content.WriteString("\nReasoning:\n")
+		wrappedReasoning := wrapText(consensus.Reasoning, m.width-8)
+		content.WriteString(wrappedReasoning)
+		content.WriteString("\n")
 	}
 
-	content += "Final Answer:\n"
+	content.WriteString("\nFinal Answer:\n")
+
+	// Word wrap the final answer to prevent horizontal scrolling
 	finalAnswer := consensus.Content
-	if len(finalAnswer) > m.width-8 {
-		finalAnswer = wrapText(finalAnswer, m.width-8)
+	if len(finalAnswer) > 0 {
+		wrappedAnswer := wrapText(finalAnswer, m.width-8)
+		content.WriteString(wrappedAnswer)
 	}
-	content += finalAnswer
 
-	return style.Width(m.width - 4).Render(content)
+	return style.Width(m.width - 4).Render(content.String())
 }
 
-// renderFooter renders the help footer
+// renderFooter renders the help footer with scroll indicators
 func (m *ResultsModel) renderFooter() string {
 	footerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")). // Dark gray
@@ -313,7 +393,21 @@ func (m *ResultsModel) renderFooter() string {
 		Padding(0, 2).
 		Width(m.width - 4)
 
-	help := "↑/↓: navigate • enter/space: expand/collapse • c: collapse all • q: quit"
+	// Build help text
+	help := "↑/↓: navigate • enter/space: expand/collapse • c: collapse all"
+
+	// Add scroll indicators if content is scrollable
+	maxScroll := m.totalHeight - m.height + 3
+	if maxScroll > 0 {
+		help += " • Shift+↑/↓: scroll • PgUp/PgDn: page"
+
+		// Add scroll position indicator
+		scrollPercent := float64(m.scrollOffset) / float64(maxScroll) * 100
+		help += fmt.Sprintf(" • Scroll: %d%% (%d/%d)", int(scrollPercent), m.scrollOffset, maxScroll)
+	}
+
+	help += " • q: quit"
+
 	return footerStyle.Render(help)
 }
 
