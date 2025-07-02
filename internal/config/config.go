@@ -148,7 +148,7 @@ func (c *Config) setDefaults() {
 		homeDir, _ := os.UserHomeDir()
 		c.Cache.Dir = filepath.Join(homeDir, ".devgru", "cache")
 	}
-	if c.Cache.Enabled == false {
+	if !c.Cache.Enabled {
 		c.Cache.Enabled = true
 	}
 
