@@ -2,7 +2,9 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,14 +50,26 @@ func NewRunner(cfg *config.Config) (*Runner, error) {
 	}, nil
 }
 
+// JudgeResult represents the result from a judge evaluation
+type JudgeResult struct {
+	JudgeID  string        `json:"judge_id"`
+	WorkerID string        `json:"worker_id"`
+	Score    int           `json:"score"`
+	Reason   string        `json:"reason"`
+	Error    error         `json:"error"`
+	Duration time.Duration `json:"duration"`
+}
+
 // WorkerResult represents the result from a single worker
 type WorkerResult struct {
-	WorkerID   string                 `json:"worker_id"`
-	Content    string                 `json:"content"`
-	TokensUsed *provider.TokenUsage   `json:"tokens_used"`
-	Stats      *provider.Stats        `json:"stats"`
-	Error      error                  `json:"error"`
-	Metadata   map[string]interface{} `json:"metadata"`
+	WorkerID     string                 `json:"worker_id"`
+	Content      string                 `json:"content"`
+	TokensUsed   *provider.TokenUsage   `json:"tokens_used"`
+	Stats        *provider.Stats        `json:"stats"`
+	Error        error                  `json:"error"`
+	Metadata     map[string]interface{} `json:"metadata"`
+	JudgeResults []JudgeResult          `json:"judge_results,omitempty"`
+	AverageScore float64                `json:"average_score,omitempty"`
 }
 
 // RunResult contains the results from all workers
@@ -110,7 +124,7 @@ func (r *Runner) Run(ctx context.Context, prompt string) (*RunResult, error) {
 	r.calculateAggregateStats(result)
 
 	// Run consensus algorithm
-	consensus, err := r.runConsensus(workerResults)
+	consensus, err := r.runConsensus(runCtx, workerResults, prompt)
 	if err != nil {
 		// Even if consensus fails, we still return the worker results
 		result.Success = false
@@ -261,7 +275,7 @@ func (r *Runner) calculateAggregateStats(result *RunResult) {
 }
 
 // runConsensus executes the configured consensus algorithm
-func (r *Runner) runConsensus(workers []WorkerResult) (*Consensus, error) {
+func (r *Runner) runConsensus(ctx context.Context, workers []WorkerResult, originalPrompt string) (*Consensus, error) {
 	// Filter out failed workers
 	successfulWorkers := make([]WorkerResult, 0, len(workers))
 	for _, worker := range workers {
@@ -283,7 +297,7 @@ func (r *Runner) runConsensus(workers []WorkerResult) (*Consensus, error) {
 	case "majority":
 		return r.majorityConsensus(successfulWorkers, consensus)
 	case "score_top1":
-		return r.scoreTop1Consensus(successfulWorkers, consensus)
+		return r.scoreTop1Consensus(ctx, successfulWorkers, consensus, originalPrompt)
 	case "embedding_cluster":
 		return nil, fmt.Errorf("embedding_cluster consensus not yet implemented")
 	case "referee":
@@ -311,11 +325,228 @@ func (r *Runner) majorityConsensus(workers []WorkerResult, consensus *Consensus)
 	return consensus, nil
 }
 
-// scoreTop1Consensus implements judge-based scoring (placeholder for now)
-func (r *Runner) scoreTop1Consensus(workers []WorkerResult, consensus *Consensus) (*Consensus, error) {
-	// TODO: Implement actual judge-based scoring
-	// For now, fall back to majority consensus
-	return r.majorityConsensus(workers, consensus)
+// scoreTop1Consensus implements judge-based scoring
+func (r *Runner) scoreTop1Consensus(ctx context.Context, workers []WorkerResult, consensus *Consensus, originalPrompt string) (*Consensus, error) {
+	if len(r.config.Judges) == 0 {
+		// No judges configured, fall back to majority
+		return r.majorityConsensus(workers, consensus)
+	}
+
+	// Evaluate each worker response with all judges
+	evaluatedWorkers := make([]WorkerResult, len(workers))
+	copy(evaluatedWorkers, workers)
+
+	for i := range evaluatedWorkers {
+		if evaluatedWorkers[i].Error == nil {
+			judgeResults, err := r.evaluateWithJudges(ctx, evaluatedWorkers[i], originalPrompt)
+			if err != nil {
+				// Log error but don't fail consensus - we can still compare what we have
+				fmt.Printf("Warning: Failed to evaluate worker %s with judges: %v\n", evaluatedWorkers[i].WorkerID, err)
+			} else {
+				evaluatedWorkers[i].JudgeResults = judgeResults
+				evaluatedWorkers[i].AverageScore = r.calculateAverageScore(judgeResults)
+			}
+		}
+	}
+
+	// Find the worker with the highest average score
+	var bestWorker *WorkerResult
+	var bestScore float64 = -1
+
+	for i := range evaluatedWorkers {
+		worker := &evaluatedWorkers[i]
+		if worker.Error == nil {
+			// If we have judge scores, use them; otherwise use a default score
+			score := worker.AverageScore
+			if len(worker.JudgeResults) == 0 {
+				score = 5.0 // Default neutral score for workers not evaluated
+			}
+
+			if score > bestScore {
+				bestScore = score
+				bestWorker = worker
+			}
+		}
+	}
+
+	if bestWorker == nil {
+		return nil, fmt.Errorf("no valid workers found for scoring")
+	}
+
+	// Check if the best score meets the minimum threshold
+	if bestScore < r.config.Consensus.MinScore {
+		return nil, fmt.Errorf("best score %.2f does not meet minimum threshold %.2f", bestScore, r.config.Consensus.MinScore)
+	}
+
+	consensus.Winner = bestWorker.WorkerID
+	consensus.Content = bestWorker.Content
+	consensus.Confidence = bestScore / 10.0 // Convert 0-10 score to 0-1 confidence
+
+	// Build reasoning
+	reasoning := fmt.Sprintf("Selected %s with average score %.2f from %d judges",
+		bestWorker.WorkerID, bestScore, len(r.config.Judges))
+
+	if len(bestWorker.JudgeResults) > 0 {
+		reasoning += " ("
+		for i, result := range bestWorker.JudgeResults {
+			if i > 0 {
+				reasoning += ", "
+			}
+			reasoning += fmt.Sprintf("%s: %d", result.JudgeID, result.Score)
+		}
+		reasoning += ")"
+	}
+
+	consensus.Reasoning = reasoning
+
+	// Update the workers slice with evaluation results
+	copy(workers, evaluatedWorkers)
+
+	return consensus, nil
+}
+
+// evaluateWithJudges evaluates a worker response with all configured judges
+func (r *Runner) evaluateWithJudges(ctx context.Context, worker WorkerResult, originalPrompt string) ([]JudgeResult, error) {
+	g, ctx := errgroup.WithContext(ctx)
+	results := make([]JudgeResult, len(r.config.Judges))
+	var mu sync.Mutex
+
+	for i, judge := range r.config.Judges {
+		i, judge := i, judge // Capture loop variables
+
+		g.Go(func() error {
+			result := r.evaluateWithSingleJudge(ctx, worker, originalPrompt, judge)
+
+			mu.Lock()
+			results[i] = result
+			mu.Unlock()
+
+			return nil // Don't fail the group if one judge fails
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	// Filter out failed evaluations
+	var validResults []JudgeResult
+	for _, result := range results {
+		if result.Error == nil {
+			validResults = append(validResults, result)
+		}
+	}
+
+	return validResults, nil
+}
+
+// evaluateWithSingleJudge evaluates a worker response with a single judge
+func (r *Runner) evaluateWithSingleJudge(ctx context.Context, worker WorkerResult, originalPrompt string, judge config.Judge) JudgeResult {
+	startTime := time.Now()
+	result := JudgeResult{
+		JudgeID:  judge.ID,
+		WorkerID: worker.WorkerID,
+	}
+
+	// Get the provider for this judge
+	prov, err := r.providerManager.GetProvider(judge.Provider)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to get judge provider %s: %w", judge.Provider, err)
+		result.Duration = time.Since(startTime)
+		return result
+	}
+
+	// Construct the evaluation prompt
+	evaluationPrompt := fmt.Sprintf(`Original Question: %s
+
+Response to Evaluate: %s
+
+Please evaluate this response according to the criteria in your system prompt.`, originalPrompt, worker.Content)
+
+	// Set up options for the judge
+	opts := provider.Options{
+		Temperature:  0.1, // Low temperature for consistent evaluation
+		MaxTokens:    500, // Judges should be concise
+		SystemPrompt: judge.SystemPrompt,
+		Stream:       false, // Non-streaming for easier parsing
+	}
+
+	// Execute the evaluation
+	responseChan, err := prov.Ask(ctx, evaluationPrompt, opts)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to ask judge: %w", err)
+		result.Duration = time.Since(startTime)
+		return result
+	}
+
+	// Collect the response
+	collector := provider.NewStreamCollector()
+	collector.Collect(ctx, responseChan)
+
+	result.Duration = time.Since(startTime)
+
+	if collector.Error != nil {
+		result.Error = collector.Error
+		return result
+	}
+
+	// Parse the JSON response
+	score, reason, err := r.parseJudgeResponse(collector.Content)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to parse judge response: %w", err)
+		return result
+	}
+
+	result.Score = score
+	result.Reason = reason
+
+	return result
+}
+
+// parseJudgeResponse parses the JSON response from a judge
+func (r *Runner) parseJudgeResponse(response string) (int, string, error) {
+	// Try to extract JSON from the response
+	response = strings.TrimSpace(response)
+
+	// Look for JSON object in the response
+	start := strings.Index(response, "{")
+	end := strings.LastIndex(response, "}")
+
+	if start == -1 || end == -1 || end <= start {
+		return 0, "", fmt.Errorf("no JSON object found in response: %s", response)
+	}
+
+	jsonStr := response[start : end+1]
+
+	var judgeResponse struct {
+		Score  int    `json:"score"`
+		Reason string `json:"reason"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &judgeResponse); err != nil {
+		return 0, "", fmt.Errorf("failed to unmarshal JSON: %w", err)
+	}
+
+	// Validate score range
+	if judgeResponse.Score < 0 || judgeResponse.Score > 10 {
+		return 0, "", fmt.Errorf("score %d is out of range (0-10)", judgeResponse.Score)
+	}
+
+	return judgeResponse.Score, judgeResponse.Reason, nil
+}
+
+// calculateAverageScore calculates the average score from judge results
+func (r *Runner) calculateAverageScore(judgeResults []JudgeResult) float64 {
+	if len(judgeResults) == 0 {
+		return 0
+	}
+
+	var total int
+	for _, result := range judgeResults {
+		total += result.Score
+	}
+
+	return float64(total) / float64(len(judgeResults))
 }
 
 // Close cleans up the runner and its resources

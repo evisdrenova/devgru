@@ -49,10 +49,10 @@ judges:
 consensus:
   # Available algorithms:
   # - majority: Simple majority vote (currently just picks first successful response)
-  # - score_top1: Use judges to score responses, pick highest (TODO)
+  # - score_top1: Use judges to score responses, pick highest (implemented!)
   # - embedding_cluster: Group similar responses, pick largest cluster (TODO)
   # - referee: Use an LLM to pick the best response (TODO)
-  algorithm: majority
+  algorithm: score_top1
 
   # Minimum score required for score_top1 algorithm
   min_score: 6

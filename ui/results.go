@@ -221,6 +221,11 @@ func (m *ResultsModel) renderWorker(index int, worker runner.WorkerResult) strin
 			worker.Stats.EstimatedCost)
 	}
 
+	// Add average score if available
+	if len(worker.JudgeResults) > 0 {
+		headerText += fmt.Sprintf(" • Score: %.1f/10", worker.AverageScore)
+	}
+
 	header := headerStyle.Width(m.width - 4).Render(headerText)
 
 	// If not expanded, just return header
@@ -242,6 +247,12 @@ func (m *ResultsModel) renderWorker(index int, worker runner.WorkerResult) strin
 		content = fmt.Sprintf("Error: %v", worker.Error)
 	} else {
 		content = worker.Content
+
+		// Add judge results if available
+		if len(worker.JudgeResults) > 0 {
+			content += "\n\n" + m.renderJudgeResults(worker.JudgeResults, worker.AverageScore)
+		}
+
 		// Wrap long content
 		if len(content) > m.width-12 {
 			content = wrapText(content, m.width-12)
@@ -304,6 +315,48 @@ func (m *ResultsModel) renderFooter() string {
 
 	help := "↑/↓: navigate • enter/space: expand/collapse • c: collapse all • q: quit"
 	return footerStyle.Render(help)
+}
+
+// renderJudgeResults renders the judge evaluation results
+func (m *ResultsModel) renderJudgeResults(judgeResults []runner.JudgeResult, averageScore float64) string {
+	if len(judgeResults) == 0 {
+		return ""
+	}
+
+	judgeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("214")). // Yellow
+		Bold(true)
+
+	var content strings.Builder
+	content.WriteString(judgeStyle.Render("📊 JUDGE EVALUATIONS"))
+	content.WriteString(fmt.Sprintf(" (Average: %.1f/10)\n", averageScore))
+
+	for _, result := range judgeResults {
+		scoreColor := lipgloss.Color("196") // Red
+		if result.Score >= 7 {
+			scoreColor = lipgloss.Color("46") // Green
+		} else if result.Score >= 5 {
+			scoreColor = lipgloss.Color("214") // Yellow
+		}
+
+		scoreStyle := lipgloss.NewStyle().Foreground(scoreColor).Bold(true)
+
+		content.WriteString(fmt.Sprintf("• %s: ", result.JudgeID))
+		content.WriteString(scoreStyle.Render(fmt.Sprintf("%d/10", result.Score)))
+		content.WriteString(fmt.Sprintf(" (%v)\n", result.Duration.Round(time.Millisecond)))
+
+		if result.Reason != "" {
+			// Wrap the reason text
+			wrappedReason := wrapText(result.Reason, m.width-16)
+			lines := strings.Split(wrappedReason, "\n")
+			for _, line := range lines {
+				content.WriteString(fmt.Sprintf("  %s\n", line))
+			}
+		}
+		content.WriteString("\n")
+	}
+
+	return content.String()
 }
 
 // wrapText wraps text to the specified width
