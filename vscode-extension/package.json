@@ -4,6 +4,11 @@
   "description": "Multi-agent LLM consensus directly in VS Code",
   "version": "0.1.0",
   "publisher": "devgru",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/evisdrenova/devgru.git"
+  },
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -12,30 +17,97 @@
     "Machine Learning",
     "Other"
   ],
+  "keywords": [
+    "ai",
+    "llm",
+    "openai",
+    "consensus",
+    "multi-agent"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:devgru.openPanel",
+    "onCommand:devgru.insertFileReference",
+    "onCommand:devgru.runPrompt"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "devgru.openPanel",
-        "title": "Open DevGru Panel"
+        "title": "Open DevGru Panel",
+        "category": "DevGru"
+      },
+      {
+        "command": "devgru.insertFileReference",
+        "title": "Insert File Reference",
+        "category": "DevGru"
+      },
+      {
+        "command": "devgru.runPrompt",
+        "title": "Run Prompt with DevGru",
+        "category": "DevGru"
       }
     ],
     "keybindings": [
       {
         "command": "devgru.openPanel",
         "key": "cmd+escape",
+        "mac": "cmd+escape",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "devgru.openPanel",
+        "key": "ctrl+escape",
+        "when": "editorTextFocus && !isMac"
+      },
+      {
+        "command": "devgru.insertFileReference",
+        "key": "cmd+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "devgru.insertFileReference",
+        "key": "ctrl+alt+k",
+        "when": "editorTextFocus && !isMac"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "DevGru",
+      "properties": {
+        "devgru.serverPort": {
+          "type": "number",
+          "default": 8123,
+          "description": "Port for DevGru WebSocket server"
+        },
+        "devgru.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to DevGru server when detected"
+        },
+        "devgru.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send diagnostic information to DevGru"
+        }
+      }
+    }
   },
   "scripts": {
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "echo \"No tests yet\""
   },
   "devDependencies": {
     "@types/vscode": "^1.74.0",
-    "@types/ws": "^8.18.1",
-    "typescript": "^4.9.4"
+    "@types/node": "16.x",
+    "typescript": "^4.9.4",
+    "eslint": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^5.0.0",
+    "@typescript-eslint/parser": "^5.0.0"
   },
   "dependencies": {
     "ws": "^8.14.2"
