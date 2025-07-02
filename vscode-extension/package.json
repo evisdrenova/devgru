@@ -1,0 +1,42 @@
+{
+  "name": "devgru-code",
+  "displayName": "DevGru Code",
+  "description": "Multi-agent LLM consensus directly in VS Code",
+  "version": "0.1.0",
+  "publisher": "devgru",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "AI",
+    "Machine Learning",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "devgru.openPanel",
+        "title": "Open DevGru Panel"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "devgru.openPanel",
+        "key": "cmd+escape",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  }
+}
