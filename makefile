@@ -116,3 +116,12 @@ quick:
 	@echo "⚡ Quick rebuild (binary only)..."
 	go build -o bin/devgru ./cmd/devgru
 	@echo "✅ Quick build complete"
+
+
+go-watch:
+	@echo "👂 Watching Go files for changes…"
+	@fswatch -o cmd pkg *.go | \
+	while read num; do \
+	  echo "🔄 Change detected, rebuilding Go binary…"; \
+	  $(MAKE) quick; \
+	done
