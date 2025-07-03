@@ -358,23 +358,67 @@ func (m *InteractiveModel) View() string {
 
 // renderInput renders the input screen
 func (m *InteractiveModel) renderInput() string {
-	// Tip section at the top
-	tipStyle := lipgloss.NewStyle().
-		Italic(true).
+	// Status line above input - VS Code status + Workers info on left, Current file on right
+	statusLineStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
-		Padding(0, 2).
+		Padding(0, 4).
 		Width(m.width)
 
-	var tipText string
+	// Left side: VS Code status + Workers info
+	var leftStatus string
 	if m.ideServer != nil && m.ideServer.IsConnected() {
-		tipText = "💡 VS Code connected! Your file context is automatically included in prompts."
-	} else if m.ideServer != nil {
-		tipText = "💡 VS Code integration ready! Install the DevGru extension to sync your file context."
+		leftStatus = fmt.Sprintf("✅ VS Code Connected • Workers: %d • Algorithm: %s • Timeout: %v",
+			len(m.config.Workers),
+			m.config.Consensus.Algorithm,
+			m.config.Consensus.Timeout)
 	} else {
-		tipText = "💡 Tip: Start with small features or bug fixes, tell Claude to propose a plan, and verify its suggested edits"
+		leftStatus = fmt.Sprintf("🔌 VS Code Ready • Workers: %d • Algorithm: %s • Timeout: %v",
+			len(m.config.Workers),
+			m.config.Consensus.Algorithm,
+			m.config.Consensus.Timeout)
 	}
 
-	tip := tipStyle.Render(tipText)
+	// Right side: Current file info
+	var rightStatus string
+	if m.ideServer != nil && m.ideServer.IsConnected() && m.ideContext.ActiveFile != "" {
+		rightStatus = fmt.Sprintf("📁 %s", m.ideContext.ActiveFile)
+
+		// Add selection info if available
+		if m.ideContext.Selection != nil {
+			sel := m.ideContext.Selection
+			if sel.StartLine == sel.EndLine {
+				rightStatus += fmt.Sprintf(" (L%d)", sel.StartLine)
+			} else {
+				rightStatus += fmt.Sprintf(" (L%d-L%d)", sel.StartLine, sel.EndLine)
+			}
+		}
+	}
+
+	// Create the status line with left and right alignment
+	var statusLine string
+	if rightStatus != "" {
+		// Calculate padding needed for right alignment
+		leftWidth := lipgloss.Width(leftStatus)
+		rightWidth := lipgloss.Width(rightStatus)
+		availableWidth := m.width - 8 // Account for padding
+		paddingNeeded := availableWidth - leftWidth - rightWidth
+
+		if paddingNeeded > 0 {
+			padding := strings.Repeat(" ", paddingNeeded)
+			statusLine = leftStatus + padding + rightStatus
+		} else {
+			// If not enough space, truncate left status
+			maxLeftWidth := availableWidth - rightWidth - 3 // Leave space for "..."
+			if maxLeftWidth > 0 && leftWidth > maxLeftWidth {
+				leftStatus = leftStatus[:maxLeftWidth] + "..."
+			}
+			statusLine = leftStatus + " " + rightStatus
+		}
+	} else {
+		statusLine = leftStatus
+	}
+
+	statusLineRendered := statusLineStyle.Render(statusLine)
 
 	// Input section
 	inputStyle := lipgloss.NewStyle().
@@ -382,28 +426,12 @@ func (m *InteractiveModel) renderInput() string {
 		BorderForeground(lipgloss.Color("63")).
 		Padding(1, 2).
 		Width(m.width-8).
-		Margin(2, 4)
+		Margin(0, 4) // Remove top margin since status line is above
 
-	promptStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("214")).
-		MarginBottom(1)
-
-	prompt := promptStyle.Render("> 🔥")
 	inputField := m.inputModel.textInput.View()
-	inputContent := lipgloss.JoinVertical(lipgloss.Left, prompt, inputField)
+	inputContent := lipgloss.JoinVertical(lipgloss.Left, inputField)
 
 	inputSection := inputStyle.Render(inputContent)
-
-	// Config info
-	configStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Padding(1, 4)
-
-	configInfo := configStyle.Render(fmt.Sprintf("Workers: %d • Algorithm: %s • Timeout: %v",
-		len(m.config.Workers),
-		m.config.Consensus.Algorithm,
-		m.config.Consensus.Timeout))
 
 	// History section (if available)
 	var historySection string
@@ -435,67 +463,6 @@ func (m *InteractiveModel) renderInput() string {
 
 	shortcuts := shortcutStyle.Render("? for shortcuts")
 
-	// File info section - shows current file and selection from VS Code
-	var fileSection string
-	if m.ideServer != nil {
-		if m.ideServer.IsConnected() && m.ideContext.ActiveFile != "" {
-			// Connected and has active file
-			fileStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Background(lipgloss.Color("235")).
-				Padding(0, 2).
-				Margin(1, 4).
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("39"))
-
-			var fileInfo strings.Builder
-			fileInfo.WriteString(fmt.Sprintf("📁 %s", m.ideContext.ActiveFile))
-
-			// Show selection info if available
-			if m.ideContext.Selection != nil {
-				sel := m.ideContext.Selection
-				if sel.StartLine == sel.EndLine {
-					fileInfo.WriteString(fmt.Sprintf("\n🎯 Selection: L%d", sel.StartLine))
-				} else {
-					fileInfo.WriteString(fmt.Sprintf("\n🎯 Selection: L%d-L%d", sel.StartLine, sel.EndLine))
-				}
-
-				// Show preview of selection (first 50 chars)
-				preview := strings.ReplaceAll(sel.Text, "\n", " ")
-				if len(preview) > 50 {
-					preview = preview[:50] + "..."
-				}
-				fileInfo.WriteString(fmt.Sprintf("\n💡 \"%s\"", preview))
-			}
-
-			// Show VS Code connection status
-			fileInfo.WriteString("\n✅ VS Code Connected")
-
-			fileSection = fileStyle.Render(fileInfo.String())
-		} else {
-			// IDE server running but VS Code not connected or no active file
-			statusStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("214")).
-				Background(lipgloss.Color("237")).
-				Padding(0, 2).
-				Margin(1, 4).
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("214"))
-
-			var statusInfo strings.Builder
-			statusInfo.WriteString("🔌 VS Code Integration Ready")
-			statusInfo.WriteString(fmt.Sprintf("\n📡 Listening on port %d", m.config.Ide.Port))
-
-			if !m.ideServer.IsConnected() {
-				statusInfo.WriteString("\n💡 Open VS Code and install DevGru extension to connect")
-			} else {
-				statusInfo.WriteString("\n📂 Open a file in VS Code to see it here")
-			}
-
-			fileSection = statusStyle.Render(statusInfo.String())
-		}
-	}
-
 	// Footer
 	footerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
@@ -505,15 +472,11 @@ func (m *InteractiveModel) renderInput() string {
 
 	footer := footerStyle.Render("enter: run • ctrl+l: clear • ↑/↓: history • ctrl+c: quit")
 
-	// Combine sections
-	sections := []string{tip, "", inputSection, configInfo}
+	// Combine sections - removed config info and file section, added status line above input
+	sections := []string{"", statusLineRendered, inputSection}
 
 	if historySection != "" {
 		sections = append(sections, historySection)
-	}
-
-	if fileSection != "" {
-		sections = append(sections, fileSection)
 	}
 
 	sections = append(sections, shortcuts)
