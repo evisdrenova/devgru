@@ -118,10 +118,19 @@ quick:
 	@echo "✅ Quick build complete"
 
 
-go-watch:
-	@echo "👂 Watching Go files for changes…"
-	@fswatch -o cmd pkg *.go | \
-	while read num; do \
-	  echo "🔄 Change detected, rebuilding Go binary…"; \
-	  $(MAKE) quick; \
-	done
+dev-server:
+	@echo "👂 Watching all Go files — rebuild & restart DevGru on change"
+	@find . -type f -name '*.go' \
+	  | entr -r sh -c '\
+	      echo "🔄 Change detected — rebuilding…"; \
+	      go build -o bin/devgru ./cmd/devgru && \
+	      echo "✅ Built bin/devgru"; \
+	      echo "🔂 Killing any old DevGru processes…"; \
+	      pkill -f "./bin/devgru ide connect" || true; \
+	      pkill -f "./bin/devgru$$" || true; \
+	      echo "🚀 Starting IDE server…"; \
+	      ./bin/devgru ide connect & \
+	      sleep 1; \
+	      echo "💬 Starting interactive TUI…"; \
+	      ./bin/devgru; \
+	    '

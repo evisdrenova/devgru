@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -21,7 +21,7 @@ import (
 //go:embed devgru_logo.txt
 var devgruLogo string
 
-// AppState represents the current state of the application
+// AppState represents the current state of the application (kept for compatibility)
 type AppState int
 
 type StepStatus string
@@ -32,13 +32,32 @@ const (
 	StateResults
 	StateError
 )
+
 const (
 	StatusWorking  StepStatus = "working"
 	StatusComplete StepStatus = "complete"
 	StatusError    StepStatus = "error"
 )
 
-// PlanningStepMsg is emitted as each sub-step of the plan runs.
+type PlanStepType string
+
+const (
+	PlanStepRead   PlanStepType = "read"
+	PlanStepUpdate PlanStepType = "update"
+	PlanStepCreate PlanStepType = "create"
+	PlanStepDelete PlanStepType = "delete"
+)
+
+type ChatEntryType string
+
+const (
+	ChatEntryUser     ChatEntryType = "user"
+	ChatEntrySystem   ChatEntryType = "system"
+	ChatEntryPlanning ChatEntryType = "planning"
+	ChatEntryResult   ChatEntryType = "result"
+	ChatEntryError    ChatEntryType = "error"
+)
+
 type PlanningStepMsg struct {
 	Step        string     `json:"step"`
 	Description string     `json:"description"`
@@ -57,15 +76,6 @@ type PlanResult struct {
 	Confidence   float64
 	Reasoning    string
 }
-
-type PlanStepType string
-
-const (
-	PlanStepRead   PlanStepType = "read"
-	PlanStepUpdate PlanStepType = "update"
-	PlanStepCreate PlanStepType = "create"
-	PlanStepDelete PlanStepType = "delete"
-)
 
 type PlanStep struct {
 	Number      int
@@ -92,9 +102,16 @@ type IDEContextUpdateMsg struct {
 	context *ide.IDEContext
 }
 
+// ChatEntry represents a single entry in the chat history
+type ChatEntry struct {
+	Type      ChatEntryType
+	Content   string
+	Timestamp time.Time
+	Data      interface{} // Store additional data like PlanResult, RunResult, etc.
+}
+
 // InteractiveModel represents the main interactive application model
 type InteractiveModel struct {
-	state  AppState
 	width  int
 	height int
 
@@ -103,119 +120,173 @@ type InteractiveModel struct {
 	config    *config.Config
 	ideServer *ide.Server
 
-	// Input screen
-	inputModel *InputModel
+	// Chat history and viewport
+	chatHistory []ChatEntry
+	viewport    viewport.Model
+	textArea    textarea.Model
 
-	// Planning state
+	// Current state for tracking ongoing operations
 	currentPrompt string
-	planningSteps []PlanningStepMsg
-	finalPlan     *PlanResult
-
-	// Results screen
-	resultsModel *ResultsModel
-
-	// Error state
-	errorMessage string
+	isProcessing  bool
 
 	// IDE context from VS Code
 	ideContext *ide.IDEContext
 
-	// Global key bindings
+	// Key bindings
 	keys GlobalKeyMap
 }
 
 // GlobalKeyMap defines global key bindings
 type GlobalKeyMap struct {
-	Back key.Binding
-	Quit key.Binding
-}
-
-// DefaultGlobalKeyMap returns default global key bindings
-func DefaultGlobalKeyMap() GlobalKeyMap {
-	return GlobalKeyMap{
-		Back: key.NewBinding(
-			key.WithKeys("esc"),
-			key.WithHelp("esc", "back"),
-		),
-		Quit: key.NewBinding(
-			key.WithKeys("ctrl+c"),
-			key.WithHelp("ctrl+c", "quit"),
-		),
-	}
-}
-
-// InputModel represents the command input screen
-type InputModel struct {
-	textArea textarea.Model
-	history  []string
-	cursor   int
-	keys     InputKeyMap
-	width    int
-	height   int
-}
-
-type InputKeyMap struct {
 	Submit key.Binding
 	Clear  key.Binding
+	Quit   key.Binding
 	Up     key.Binding
 	Down   key.Binding
-	Help   key.Binding
 }
 
-func DefaultInputKeyMap() InputKeyMap {
-	return InputKeyMap{
+func DefaultGlobalKeyMap() GlobalKeyMap {
+	return GlobalKeyMap{
 		Submit: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("enter", "run command"),
+			key.WithHelp("enter", "submit"),
 		),
 		Clear: key.NewBinding(
 			key.WithKeys("ctrl+l"),
 			key.WithHelp("ctrl+l", "clear"),
 		),
+		Quit: key.NewBinding(
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
+		),
 		Up: key.NewBinding(
 			key.WithKeys("up"),
-			key.WithHelp("↑", "history up"),
+			key.WithHelp("↑", "scroll up"),
 		),
 		Down: key.NewBinding(
 			key.WithKeys("down"),
-			key.WithHelp("↓", "history down"),
+			key.WithHelp("↓", "scroll down"),
 		),
-		Help: key.NewBinding(
-			key.WithKeys("?"),
-			key.WithHelp("?", "shortcuts"),
-		),
-	}
-}
-
-func NewInteractiveModel(r *runner.Runner, cfg *config.Config, ideServer *ide.Server) *InteractiveModel {
-	ti := textarea.New()
-	ti.Placeholder = `Try "write a test for <filepath>"`
-	ti.Focus()
-	ti.CharLimit = 1000
-
-	inputModel := &InputModel{
-		textArea: ti,
-		history:  []string{},
-		keys:     DefaultInputKeyMap(),
-		width:    80,
-		height:   24,
-	}
-
-	return &InteractiveModel{
-		state:      StateInput,
-		runner:     r,
-		config:     cfg,
-		ideServer:  ideServer,
-		inputModel: inputModel,
-		ideContext: &ide.IDEContext{},
-		keys:       DefaultGlobalKeyMap(),
 	}
 }
 
 func (m *InteractiveModel) Init() tea.Cmd {
 	return tea.Batch(
-		textinput.Blink,
-		m.pollIDEContext(), // Start polling IDE context
+		m.pollIDEContext(),
+	)
+}
+
+func NewInteractiveModel(r *runner.Runner, cfg *config.Config, ideServer *ide.Server) *InteractiveModel {
+	// Create viewport for chat history
+	vp := viewport.New(0, 0)
+	vp.Style = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(1)
+
+	// Create textarea for input
+	ta := textarea.New()
+	ta.Placeholder = `Try "write a test for <filepath>"`
+	ta.Focus()
+	ta.CharLimit = 1000
+	ta.SetHeight(3)
+
+	// initial welcome message
+	chatHistory := []ChatEntry{
+		{
+			Type:      "system",
+			Content:   "🤖 Welcome to DevGru Interactive Chat!",
+			Timestamp: time.Now(),
+		},
+	}
+
+	return &InteractiveModel{
+		runner:      r,
+		config:      cfg,
+		ideServer:   ideServer,
+		chatHistory: chatHistory,
+		viewport:    vp,
+		textArea:    ta,
+		ideContext:  &ide.IDEContext{},
+		keys:        DefaultGlobalKeyMap(),
+	}
+}
+
+func (m *InteractiveModel) View() string {
+	if m.width == 0 {
+		return "Loading..."
+	}
+
+	// Status bar
+	statusStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Background(lipgloss.Color("235")).
+		Padding(0, 2).
+		Width(m.width)
+
+	var statusLeft string
+	if m.ideServer != nil && m.ideServer.IsConnected() {
+		statusLeft = fmt.Sprintf("✅ VS Code Connected • Workers: %d", len(m.config.Workers))
+	} else {
+		statusLeft = fmt.Sprintf("🔌 VS Code Ready • Workers: %d", len(m.config.Workers))
+	}
+
+	var statusRight string
+	if m.ideContext.ActiveFile != "" {
+		statusRight = fmt.Sprintf("📁 %s", m.ideContext.ActiveFile)
+	}
+
+	// Create status line
+	statusLine := statusLeft
+	if statusRight != "" {
+		padding := m.width - lipgloss.Width(statusLeft) - lipgloss.Width(statusRight) - 4
+		if padding > 0 {
+			statusLine += strings.Repeat(" ", padding) + statusRight
+		}
+	}
+
+	status := statusStyle.Render(statusLine)
+
+	// Chat viewport
+	chatView := m.viewport.View()
+
+	// Input area
+	inputStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(0, 1).
+		Width(m.width-4).
+		Margin(0, 2)
+
+	var inputPrompt string
+	if m.isProcessing {
+		inputPrompt = "🔄 Processing..."
+	} else {
+		inputPrompt = "Enter your request:"
+	}
+
+	inputContent := lipgloss.JoinVertical(
+		lipgloss.Left,
+		inputPrompt,
+		m.textArea.View(),
+	)
+
+	inputSection := inputStyle.Render(inputContent)
+
+	// Help line
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Padding(0, 2)
+
+	help := helpStyle.Render("enter: submit • ctrl+l: clear • ↑/↓: scroll • ctrl+c: quit")
+
+	// Combine all sections
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		status,
+		chatView,
+		inputSection,
+		help,
 	)
 }
 
@@ -228,574 +299,298 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		m.inputModel.textArea.SetWidth(msg.Width - 4)
+		// Reserve space for input area (6 lines) and status bar (2 lines)
+		viewportHeight := msg.Height - 8
+		m.viewport.Width = msg.Width - 4
+		m.viewport.Height = viewportHeight
 
+		m.textArea.SetWidth(msg.Width - 4)
+
+		// Update viewport content with new width
+		m.updateViewportContent()
 		return m, nil
 
 	case PlanningStepMsg:
-		m.planningSteps = append(m.planningSteps, msg)
+		// Append planning step to chat
+		m.addChatEntry(ChatEntry{
+			Type:      "planning",
+			Content:   fmt.Sprintf("%s %s", m.getStatusIcon(msg.Status), msg.Step),
+			Timestamp: time.Now(),
+			Data:      msg,
+		})
 		return m, nil
 
 	case PlanningCompleteMsg:
 		if msg.err != nil {
-			m.state = StateError
-			m.errorMessage = msg.err.Error()
+			m.addChatEntry(ChatEntry{
+				Type:      "error",
+				Content:   fmt.Sprintf("❌ Planning failed: %s", msg.err.Error()),
+				Timestamp: time.Now(),
+			})
+			m.isProcessing = false
 		} else {
-			m.finalPlan = msg.plan
-			// Stay in planning state to show the final plan
+			// Add the final plan to chat
+			planContent := m.formatPlanResult(msg.plan)
+			m.addChatEntry(ChatEntry{
+				Type:      "planning",
+				Content:   planContent,
+				Timestamp: time.Now(),
+				Data:      msg.plan,
+			})
+
+			// Auto-execute the plan
+			cmds = append(cmds, m.executePlan())
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case RunCompleteMsg:
+		m.isProcessing = false
 		if msg.err != nil {
-			m.state = StateError
-			m.errorMessage = msg.err.Error()
+			m.addChatEntry(ChatEntry{
+				Type:      "error",
+				Content:   fmt.Sprintf("❌ Execution failed: %s", msg.err.Error()),
+				Timestamp: time.Now(),
+			})
 		} else {
-			m.resultsModel = NewResultsModel(msg.result)
-			m.state = StateResults
+			// Add execution result to chat
+			resultContent := m.formatRunResult(msg.result)
+			m.addChatEntry(ChatEntry{
+				Type:      "result",
+				Content:   resultContent,
+				Timestamp: time.Now(),
+				Data:      msg.result,
+			})
 		}
 		return m, nil
-
-	case tea.KeyMsg:
-		// Global key handling
-		switch {
-		case key.Matches(msg, m.keys.Quit):
-			return m, tea.Quit
-		case key.Matches(msg, m.keys.Back):
-			if m.state == StateResults || m.state == StateError {
-				m.state = StateInput
-				return m, nil
-			} else if m.state == StatePlanning {
-				m.state = StateInput
-				m.planningSteps = nil
-				m.finalPlan = nil
-				m.currentPrompt = ""
-				return m, nil
-			}
-		}
-
-		// State-specific key handling
-		switch m.state {
-		case StateInput:
-			return m.updateInput(msg)
-		case StatePlanning:
-			return m.updatePlanning(msg)
-		case StateResults:
-			if m.resultsModel != nil {
-				var updatedModel tea.Model
-				updatedModel, cmd = m.resultsModel.Update(msg)
-				m.resultsModel = updatedModel.(*ResultsModel)
-				return m, cmd
-			}
-		case StateError:
-			m.state = StateInput
-			return m, nil
-		}
 
 	case IDEContextUpdateMsg:
 		if msg.context != nil {
 			m.ideContext = msg.context
 		}
 		return m, m.pollIDEContext()
+
+	case tea.KeyMsg:
+		// Handle key bindings
+		switch {
+		case key.Matches(msg, m.keys.Quit):
+			return m, tea.Quit
+
+		case key.Matches(msg, m.keys.Submit):
+			if !m.isProcessing {
+				input := strings.TrimSpace(m.textArea.Value())
+				if input != "" {
+					// Add user message to chat
+					m.addChatEntry(ChatEntry{
+						Type:      "user",
+						Content:   input,
+						Timestamp: time.Now(),
+					})
+
+					// Clear input
+					m.textArea.SetValue("")
+					m.currentPrompt = input
+					m.isProcessing = true
+
+					// Start processing
+					return m, m.startPlanning(input)
+				}
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.Clear):
+			m.chatHistory = []ChatEntry{
+				{
+					Type:      "system",
+					Content:   "Chat cleared.",
+					Timestamp: time.Now(),
+				},
+			}
+			m.updateViewportContent()
+			return m, nil
+
+		case key.Matches(msg, m.keys.Up):
+			m.viewport.LineUp(1)
+			return m, nil
+
+		case key.Matches(msg, m.keys.Down):
+			m.viewport.LineDown(1)
+			return m, nil
+		}
 	}
 
-	// Update input model if we're in input state
-	if m.state == StateInput {
-		m.inputModel.textArea, cmd = m.inputModel.textArea.Update(msg)
-		cmds = append(cmds, cmd)
-	}
+	// Update textarea
+	m.textArea, cmd = m.textArea.Update(msg)
+	cmds = append(cmds, cmd)
+
+	// Update viewport
+	m.viewport, cmd = m.viewport.Update(msg)
+	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
 }
 
-// updatePlanning handles planning state input
-func (m *InteractiveModel) updatePlanning(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
-		if m.finalPlan != nil {
-			// User confirmed the plan, now execute it
-			return m, m.executePlan()
-		}
-	case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
-		// Regenerate plan
-		m.planningSteps = nil
-		m.finalPlan = nil
-		return m, m.startPlanning(m.currentPrompt)
-	}
-	return m, nil
+// Helper methods
+
+func (m *InteractiveModel) addChatEntry(entry ChatEntry) {
+	m.chatHistory = append(m.chatHistory, entry)
+	m.updateViewportContent()
+	// Auto-scroll to bottom
+	m.viewport.GotoBottom()
 }
 
-// updateInput handles input screen updates
-func (m *InteractiveModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
+func (m *InteractiveModel) updateViewportContent() {
+	var content []string
 
-	switch {
-	case key.Matches(msg, m.inputModel.keys.Submit):
-		input := m.inputModel.textArea.Value()
-		if input != "" {
-			m.inputModel.history = append(m.inputModel.history, input)
-			m.currentPrompt = input
-			m.state = StatePlanning
-			m.planningSteps = nil
-			m.finalPlan = nil
-			m.inputModel.textArea.SetValue("")
-
-			// Start the planning process with simulated steps
-			return m, tea.Batch(
-				func() tea.Msg {
-					return PlanningStepMsg{
-						Step:        "Analyzing request",
-						Description: "Understanding the context and requirements",
-						Status:      StatusWorking,
-					}
-				},
-				func() tea.Msg {
-					time.Sleep(500 * time.Millisecond)
-					return PlanningStepMsg{
-						Step:        "✅ Request analyzed",
-						Description: "Context and requirements understood",
-						Status:      "complete",
-					}
-				},
-				func() tea.Msg {
-					time.Sleep(1 * time.Second)
-					return PlanningStepMsg{
-						Step:        "Consulting AI workers",
-						Description: fmt.Sprintf("Getting plans from %d workers", len(m.config.Workers)),
-						Status:      "working",
-					}
-				},
-				func() tea.Msg {
-					time.Sleep(2 * time.Second)
-					return PlanningStepMsg{
-						Step:        "✅ Worker plans received",
-						Description: "All workers have submitted their plans",
-						Status:      "complete",
-					}
-				},
-				func() tea.Msg {
-					time.Sleep(3 * time.Second)
-					return PlanningStepMsg{
-						Step:        "Evaluating plans",
-						Description: "Judges are reviewing and scoring each plan",
-						Status:      "working",
-					}
-				},
-				func() tea.Msg {
-					time.Sleep(4 * time.Second)
-					return PlanningStepMsg{
-						Step:        "✅ Plan evaluation complete",
-						Description: "Best plan selected based on judge scores",
-						Status:      "complete",
-					}
-				},
-				m.runPlanningProcess(input),
-			)
-		}
-		return m, nil
-
-	case key.Matches(msg, m.inputModel.keys.Clear):
-		m.inputModel.textArea.SetValue("")
-		return m, nil
-
-	case key.Matches(msg, m.inputModel.keys.Up):
-		if len(m.inputModel.history) > 0 && m.inputModel.cursor < len(m.inputModel.history) {
-			m.inputModel.cursor++
-			idx := len(m.inputModel.history) - m.inputModel.cursor
-			m.inputModel.textArea.SetValue(m.inputModel.history[idx])
-		}
-		return m, nil
-
-	case key.Matches(msg, m.inputModel.keys.Down):
-		if m.inputModel.cursor > 0 {
-			m.inputModel.cursor--
-			if m.inputModel.cursor == 0 {
-				m.inputModel.textArea.SetValue("")
-			} else {
-				idx := len(m.inputModel.history) - m.inputModel.cursor
-				m.inputModel.textArea.SetValue(m.inputModel.history[idx])
-			}
-		}
-		return m, nil
+	for _, entry := range m.chatHistory {
+		content = append(content, m.formatChatEntry(entry))
+		content = append(content, "") // Add spacing between entries
 	}
 
-	m.inputModel.textArea, cmd = m.inputModel.textArea.Update(msg)
-	return m, cmd
+	m.viewport.SetContent(strings.Join(content, "\n"))
 }
 
-// View implements bubbletea.Model
-func (m *InteractiveModel) View() string {
-	if m.width == 0 {
-		return "Loading..."
-	}
+func (m *InteractiveModel) formatChatEntry(entry ChatEntry) string {
+	timestamp := entry.Timestamp.Format("15:04:05")
 
-	switch m.state {
-	case StateInput:
-		return m.renderInput()
-	case StatePlanning:
-		return m.renderPlanning()
-	case StateResults:
-		if m.resultsModel != nil {
-			return m.resultsModel.View()
-		}
-		return "No results to display"
-	case StateError:
-		return m.renderError()
-	}
+	switch entry.Type {
+	case "user":
+		style := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Bold(true)
+		return style.Render(fmt.Sprintf("[%s] You: %s", timestamp, entry.Content))
 
-	return "Unknown state"
-}
-
-// renderInput renders the input screen
-func (m *InteractiveModel) renderInput() string {
-	// Logo section
-	logoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("208")). // Orange fire color
-		Align(lipgloss.Center).
-		Width(m.width).
-		Padding(1, 0)
-
-	logo := logoStyle.Render(devgruLogo)
-
-	// Status line above input - VS Code status + Workers info on left, Current file on right
-	statusLineStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Padding(0, 4).
-		Width(m.width)
-
-	// Left side: VS Code status + Workers info
-	var leftStatus string
-	if m.ideServer != nil && m.ideServer.IsConnected() {
-		leftStatus = fmt.Sprintf("✅ VS Code Connected • Workers: %d • Algorithm: %s • Timeout: %v",
-			len(m.config.Workers),
-			m.config.Consensus.Algorithm,
-			m.config.Consensus.Timeout)
-	} else {
-		leftStatus = fmt.Sprintf("🔌 VS Code Ready • Workers: %d • Algorithm: %s • Timeout: %v",
-			len(m.config.Workers),
-			m.config.Consensus.Algorithm,
-			m.config.Consensus.Timeout)
-	}
-
-	// Right side: Current file info
-	var rightStatus string
-	if m.ideServer != nil && m.ideServer.IsConnected() && m.ideContext.ActiveFile != "" {
-		rightStatus = fmt.Sprintf("📁 %s", m.ideContext.ActiveFile)
-
-		// Add selection info if available
-		if m.ideContext.Selection != nil {
-			sel := m.ideContext.Selection
-			if sel.StartLine == sel.EndLine {
-				rightStatus += fmt.Sprintf(" (L%d)", sel.StartLine)
-			} else {
-				rightStatus += fmt.Sprintf(" (L%d-L%d)", sel.StartLine, sel.EndLine)
-			}
-		}
-	}
-
-	// Create the status line with left and right alignment
-	var statusLine string
-	if rightStatus != "" {
-		// Calculate padding needed for right alignment
-		leftWidth := lipgloss.Width(leftStatus)
-		rightWidth := lipgloss.Width(rightStatus)
-		availableWidth := m.width - 8 // Account for padding
-		paddingNeeded := availableWidth - leftWidth - rightWidth
-
-		if paddingNeeded > 0 {
-			padding := strings.Repeat(" ", paddingNeeded)
-			statusLine = leftStatus + padding + rightStatus
-		} else {
-			// If not enough space, truncate left status
-			maxLeftWidth := availableWidth - rightWidth - 3 // Leave space for "..."
-			if maxLeftWidth > 0 && leftWidth > maxLeftWidth {
-				leftStatus = leftStatus[:maxLeftWidth] + "..."
-			}
-			statusLine = leftStatus + " " + rightStatus
-		}
-	} else {
-		statusLine = leftStatus
-	}
-
-	statusLineRendered := statusLineStyle.Render(statusLine)
-
-	// Input section
-	inputStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("63")).
-		Padding(1, 2).
-		Width(m.width-8).
-		Margin(0, 4) // Remove top margin since status line is above
-
-	inputField := m.inputModel.textArea.View()
-	inputContent := lipgloss.JoinVertical(lipgloss.Left, inputField)
-
-	inputSection := inputStyle.Render(inputContent)
-
-	// History section (if available)
-	var historySection string
-	if len(m.inputModel.history) > 0 {
-		historyStyle := lipgloss.NewStyle().
+	case "system":
+		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
-			Padding(1, 4)
+			Italic(true)
+		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
 
-		recentCommands := "Recent commands:"
-		historyItems := []string{recentCommands}
+	case "planning":
+		style := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214"))
+		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
 
-		// Show last 3 commands
-		start := len(m.inputModel.history) - 3
-		if start < 0 {
-			start = 0
-		}
+	case "result":
+		style := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("46"))
+		return style.Render(fmt.Sprintf("[%s] ✅ %s", timestamp, entry.Content))
 
-		for i := start; i < len(m.inputModel.history); i++ {
-			historyItems = append(historyItems, fmt.Sprintf("  • %s", m.inputModel.history[i]))
-		}
+	case "error":
+		style := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196"))
+		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
 
-		historySection = historyStyle.Render(strings.Join(historyItems, "\n"))
+	default:
+		return fmt.Sprintf("[%s] %s", timestamp, entry.Content)
 	}
-
-	// Shortcuts section
-	shortcutStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Padding(1, 4)
-
-	shortcuts := shortcutStyle.Render("? for shortcuts")
-
-	// Footer
-	footerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Background(lipgloss.Color("233")).
-		Padding(0, 2).
-		Width(m.width)
-
-	footer := footerStyle.Render("enter: run • ctrl+l: clear • ↑/↓: history • ctrl+c: quit")
-
-	sections := []string{logo, "", statusLineRendered, inputSection}
-
-	if historySection != "" {
-		sections = append(sections, historySection)
-	}
-
-	sections = append(sections, shortcuts)
-
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
-
-	// Center vertically
-	availableHeight := m.height - lipgloss.Height(footer) - 2
-	contentHeight := lipgloss.Height(content)
-	paddingTop := (availableHeight - contentHeight) / 2
-	if paddingTop < 0 {
-		paddingTop = 0
-	}
-
-	paddedContent := lipgloss.NewStyle().
-		PaddingTop(paddingTop).
-		Width(m.width).
-		Render(content)
-
-	return lipgloss.JoinVertical(lipgloss.Left, paddedContent, footer)
 }
 
-// renderPlanning renders the planning state
-func (m *InteractiveModel) renderPlanning() string {
-	if m.width == 0 {
-		return "Loading..."
+func (m *InteractiveModel) getStatusIcon(status StepStatus) string {
+	switch status {
+	case StatusWorking:
+		return "🔄"
+	case StatusComplete:
+		return "✅"
+	case StatusError:
+		return "❌"
+	default:
+		return "•"
+	}
+}
+
+func (m *InteractiveModel) formatPlanResult(plan *PlanResult) string {
+	content := "🎯 PROPOSED PLAN\n\n" + plan.FinalPlan
+
+	if len(plan.Steps) > 0 {
+		content += "\n\nSteps:"
+		for _, step := range plan.Steps {
+			content += fmt.Sprintf("\n%d. %s", step.Number, step.Title)
+		}
 	}
 
-	var sections []string
+	content += fmt.Sprintf("\n\nConfidence: %.1f%%", plan.Confidence*100)
+	content += "\n\n⚡ Executing plan..."
 
-	// Show the original prompt
-	promptStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("39")).
-		Padding(0, 2)
-
-	promptSection := promptStyle.Render(fmt.Sprintf("> %s", m.currentPrompt))
-	sections = append(sections, promptSection)
-
-	// Show file context if available
-	if m.ideContext.ActiveFile != "" {
-		contextStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Padding(0, 4)
-
-		contextText := fmt.Sprintf("📁 Selected file: %s", m.ideContext.ActiveFile)
-		if m.ideContext.Selection != nil {
-			sel := m.ideContext.Selection
-			if sel.StartLine == sel.EndLine {
-				contextText += fmt.Sprintf(" (L%d)", sel.StartLine)
-			} else {
-				contextText += fmt.Sprintf(" (L%d-L%d)", sel.StartLine, sel.EndLine)
-			}
-		}
-
-		contextSection := contextStyle.Render(contextText)
-		sections = append(sections, contextSection, "")
-	}
-
-	// Show planning steps
-	for _, step := range m.planningSteps {
-		stepStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252")).
-			Padding(0, 2)
-
-		var icon string
-		switch step.Status {
-		case "working":
-			icon = "🔄"
-		case "complete":
-			icon = "✅"
-		case "error":
-			icon = "❌"
-		}
-
-		stepText := fmt.Sprintf("%s %s", icon, step.Step)
-		if step.Description != "" {
-			stepText += fmt.Sprintf("\n   %s", step.Description)
-		}
-
-		stepSection := stepStyle.Render(stepText)
-		sections = append(sections, stepSection)
-	}
-
-	// Show final plan if available
-	if m.finalPlan != nil {
-		planStyle := lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("214")).
-			Background(lipgloss.Color("237")).
-			Padding(1, 2).
-			Margin(1, 0).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("214"))
-
-		planHeader := "🎯 PROPOSED PLAN"
-		planContent := fmt.Sprintf("%s\n\n%s", planHeader, m.finalPlan.FinalPlan)
-
-		if len(m.finalPlan.Steps) > 0 {
-			planContent += "\n\nSteps:"
-			for _, step := range m.finalPlan.Steps {
-				planContent += fmt.Sprintf("\n%d. %s", step.Number, step.Title)
-				if step.Description != "" {
-					planContent += fmt.Sprintf("\n   %s", step.Description)
-				}
-			}
-		}
-
-		planContent += fmt.Sprintf("\n\nConfidence: %.1f%%", m.finalPlan.Confidence*100)
-
-		planSection := planStyle.Render(planContent)
-		sections = append(sections, "", planSection)
-
-		// Show action options
-		actionsStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Padding(1, 2)
-
-		actions := "Press Enter to execute plan • r to regenerate • Esc to cancel"
-		actionsSection := actionsStyle.Render(actions)
-		sections = append(sections, actionsSection)
-	}
-
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	return content
 }
 
-// renderError renders the error screen
-func (m *InteractiveModel) renderError() string {
-	// Error header
-	headerStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("196")).
-		Padding(1, 2).
-		Width(m.width).
-		Align(lipgloss.Center)
+func (m *InteractiveModel) formatRunResult(result *runner.RunResult) string {
+	content := fmt.Sprintf("Execution completed in %v", result.TotalDuration)
+	content += fmt.Sprintf("\nTokens used: %d", result.TotalTokens)
+	content += fmt.Sprintf("\nEstimated cost: $%.6f", result.EstimatedCost)
 
-	header := headerStyle.Render("❌ ERROR")
-
-	// Error message
-	errorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("196")).
-		Padding(2, 4).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
-		Width(m.width-8).
-		Margin(2, 4)
-
-	errorContent := errorStyle.Render(fmt.Sprintf("Failed to process request:\n\n%s", m.errorMessage))
-
-	// Instructions
-	instructionsStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Padding(1, 0).
-		Align(lipgloss.Center)
-
-	instructions := instructionsStyle.Render("Press any key to return to input, or Ctrl+C to quit")
-
-	// Combine content
-	content := lipgloss.JoinVertical(
-		lipgloss.Center,
-		header,
-		"",
-		errorContent,
-		"",
-		instructions,
-	)
-
-	// Center vertically
-	contentHeight := lipgloss.Height(content)
-	paddingTop := (m.height - contentHeight) / 2
-	if paddingTop < 0 {
-		paddingTop = 0
+	if len(result.Workers) > 0 {
+		content += "\n\nResults:"
+		for _, worker := range result.Workers {
+			if worker.Error != nil {
+				content += fmt.Sprintf("\n❌ %s: %s", worker.WorkerID, worker.Error.Error())
+			} else {
+				// Truncate long content for display
+				workerContent := worker.Content
+				if len(workerContent) > 200 {
+					workerContent = workerContent[:200] + "..."
+				}
+				content += fmt.Sprintf("\n✅ %s: %s", worker.WorkerID, workerContent)
+			}
+		}
 	}
 
-	return lipgloss.NewStyle().
-		PaddingTop(paddingTop).
-		Width(m.width).
-		Render(content)
+	return content
 }
 
-// pollIDEContext polls the IDE server for context updates
-func (m *InteractiveModel) pollIDEContext() tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
-		if m.ideServer != nil {
-			context := m.ideServer.GetContext()
-			return IDEContextUpdateMsg{context: context}
-		}
-		return IDEContextUpdateMsg{context: nil}
-	})
-}
-
-// Planning process methods
+// Planning and execution methods (keep your existing logic)
 func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
-	return func() tea.Msg {
-		return PlanningStepMsg{
-			Step:        "Analyzing request",
-			Description: "Understanding the context and requirements",
-			Status:      "working",
-		}
-	}
+	return tea.Batch(
+		func() tea.Msg {
+			return PlanningStepMsg{
+				Step:        "Analyzing request",
+				Description: "Understanding the context and requirements",
+				Status:      StatusWorking,
+			}
+		},
+		func() tea.Msg {
+			time.Sleep(500 * time.Millisecond)
+			return PlanningStepMsg{
+				Step:        "✅ Request analyzed",
+				Description: "Context and requirements understood",
+				Status:      StatusComplete,
+			}
+		},
+		func() tea.Msg {
+			time.Sleep(1 * time.Second)
+			return PlanningStepMsg{
+				Step:        "Consulting AI workers",
+				Description: fmt.Sprintf("Getting plans from %d workers", len(m.config.Workers)),
+				Status:      StatusWorking,
+			}
+		},
+		func() tea.Msg {
+			time.Sleep(2 * time.Second)
+			return PlanningStepMsg{
+				Step:        "✅ Worker plans received",
+				Description: "All workers have submitted their plans",
+				Status:      StatusComplete,
+			}
+		},
+		m.runPlanningProcess(prompt),
+	)
 }
 
 func (m *InteractiveModel) runPlanningProcess(prompt string) tea.Cmd {
 	return func() tea.Msg {
-		// Simulate the planning process
-		time.Sleep(5 * time.Second)
+		time.Sleep(3 * time.Second)
 
-		// Generate mock plan
 		finalPlan := &PlanResult{
 			FinalPlan: m.generateMockPlan(prompt),
 			Steps: []PlanStep{
-				{Number: 1, Title: "Read current implementation", Description: "Examine the selected file/function", Type: "read"},
-				{Number: 2, Title: "Identify changes needed", Description: "Determine specific modifications required", Type: "update"},
-				{Number: 3, Title: "Implement changes", Description: "Make targeted code modifications", Type: "update"},
-				{Number: 4, Title: "Test changes", Description: "Verify functionality works as expected", Type: "read"},
+				{Number: 1, Title: "Read current implementation", Type: PlanStepRead},
+				{Number: 2, Title: "Identify changes needed", Type: PlanStepUpdate},
+				{Number: 3, Title: "Implement changes", Type: PlanStepUpdate},
+				{Number: 4, Title: "Test changes", Type: PlanStepRead},
 			},
 			SelectedPlan: "claude-3-5-sonnet",
 			Confidence:   0.87,
-			Reasoning:    "Selected plan due to comprehensive analysis and clear step-by-step approach",
+			Reasoning:    "Selected plan due to comprehensive analysis",
 		}
 
 		return PlanningCompleteMsg{plan: finalPlan}
@@ -803,50 +598,33 @@ func (m *InteractiveModel) runPlanningProcess(prompt string) tea.Cmd {
 }
 
 func (m *InteractiveModel) generateMockPlan(prompt string) string {
-	return fmt.Sprintf(`## Analysis
-The request "%s" requires updating code functionality.
+	return fmt.Sprintf(`Analysis of request: "%s"
 
-## Implementation Plan
-1. **Read current implementation**
-   - Examine the selected file/function
-   - Understand current behavior and structure
+Implementation approach:
+1. Read current implementation
+2. Identify required changes  
+3. Implement modifications
+4. Test functionality
 
-2. **Identify changes needed**
-   - Determine specific modifications required
-   - Consider impact on existing functionality
-
-3. **Implement changes**
-   - Make targeted code modifications
-   - Ensure compatibility with existing code
-
-4. **Test changes**
-   - Verify functionality works as expected
-   - Run relevant tests
-
-## Files to modify
-- %s
-
-## Considerations
-- Maintain backward compatibility
-- Follow existing code patterns
-- Consider performance implications`, prompt, m.ideContext.ActiveFile)
+Target file: %s`, prompt, m.ideContext.ActiveFile)
 }
 
 func (m *InteractiveModel) executePlan() tea.Cmd {
 	return func() tea.Msg {
-		// Create a mock result showing the plan execution
+		time.Sleep(2 * time.Second)
+
 		result := &runner.RunResult{
 			Success:       true,
-			TotalDuration: time.Second * 3,
+			TotalDuration: time.Second * 2,
 			TotalTokens:   2500,
 			EstimatedCost: 0.004500,
 			Workers: []runner.WorkerResult{
 				{
 					WorkerID: "plan-executor",
-					Content:  "Plan execution started. Implementation in progress...",
-					Stats: &provider.Stats{ // Changed from runner.WorkerStats to provider.Stats
+					Content:  "Plan executed successfully. Code has been updated according to the specifications.",
+					Stats: &provider.Stats{
 						Model:         "claude-3-5-sonnet",
-						Duration:      time.Second * 3,
+						Duration:      time.Second * 2,
 						EstimatedCost: 0.004500,
 					},
 				},
@@ -855,4 +633,14 @@ func (m *InteractiveModel) executePlan() tea.Cmd {
 
 		return RunCompleteMsg{result: result, err: nil}
 	}
+}
+
+func (m *InteractiveModel) pollIDEContext() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		if m.ideServer != nil {
+			context := m.ideServer.GetContext()
+			return IDEContextUpdateMsg{context: context}
+		}
+		return IDEContextUpdateMsg{context: nil}
+	})
 }
