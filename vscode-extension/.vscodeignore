@@ -8,6 +8,8 @@ vsc-extension-quickstart.md
 **/.eslintrc.json
 **/*.map
 **/*.ts
+
+# we bundle all deps into out/extension.js
 node_modules/**
 ../**
 !out/**

@@ -128,50 +128,45 @@ class DevGruClient implements vscode.Disposable {
   }
 
   async tryConnect(): Promise<void> {
-    const config = vscode.workspace.getConfiguration("devgru");
-    const port = config.get("serverPort", 8123);
+    const port = vscode.workspace
+      .getConfiguration("devgru")
+      .get("serverPort", 8123);
 
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return; // Already connected
-    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
 
     try {
-      this.ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      this.ws = ws; // store once
 
-      this.ws.on("open", () => {
-        console.log("Connected to DevGru server");
+      ws.on("open", () => {
+        console.log("Connected to DevGru");
         vscode.window.showInformationMessage("DevGru: Connected to server");
         this.sendWorkspaceInfo();
-
-        // Clear reconnect timer
-        if (this.reconnectTimer) {
-          clearTimeout(this.reconnectTimer);
-          this.reconnectTimer = null;
-        }
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
       });
 
-      this.ws.on("message", (data: WebSocket.Data) => {
+      ws.on("message", (data) => {
         try {
-          const message: DevGruMessage = JSON.parse(data.toString());
-          this.handleServerMessage(message);
+          const msg: DevGruMessage = JSON.parse(data.toString());
+          this.handleServerMessage(msg);
         } catch (e) {
           console.error("Failed to parse DevGru message:", e);
         }
       });
 
-      this.ws.on("close", () => {
-        console.log("Disconnected from DevGru server");
+      ws.on("close", () => {
+        console.log("DevGru WS closed");
         this.ws = null;
         this.scheduleReconnect();
       });
 
-      this.ws.on("error", (error) => {
-        console.error("DevGru WebSocket error:", error);
+      ws.on("error", (err) => {
+        console.error("DevGru WS error:", err);
         this.ws = null;
         this.scheduleReconnect();
       });
-    } catch (error) {
-      console.error("Failed to connect to DevGru server:", error);
+    } catch (err) {
+      console.error("Failed to connect to DevGru server:", err);
       this.scheduleReconnect();
     }
   }

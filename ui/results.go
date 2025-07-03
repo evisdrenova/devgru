@@ -6,40 +6,78 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/evisdrenova/devgru/internal/runner"
 )
 
-// ResultsModel represents the TUI for displaying run results
-type ResultsModel struct {
-	result       *runner.RunResult
-	cursor       int
-	expanded     map[int]bool // Track which worker sections are expanded
-	width        int
-	height       int
-	keys         KeyMap
-	scrollOffset int // Track vertical scroll position
-	totalHeight  int // Total height of all content
+// AppState represents the current state of the application
+type AppState int
+
+const (
+	StateWelcome AppState = iota
+	StateInput
+	StateResults
+)
+
+// Model represents the main application model
+type Model struct {
+	state  AppState
+	width  int
+	height int
+
+	// Welcome screen
+	welcomeModel *WelcomeModel
+
+	// Input screen
+	inputModel *InputModel
+
+	// Results screen
+	resultsModel *ResultsModel
+
+	// Global key bindings
+	keys GlobalKeyMap
 }
 
-// KeyMap defines the key bindings
-type KeyMap struct {
-	Up         key.Binding
-	Down       key.Binding
-	Expand     key.Binding
-	Collapse   key.Binding
-	ScrollUp   key.Binding
-	ScrollDown key.Binding
-	PageUp     key.Binding
-	PageDown   key.Binding
-	Quit       key.Binding
+// GlobalKeyMap defines global key bindings
+type GlobalKeyMap struct {
+	Back key.Binding
+	Quit key.Binding
 }
 
-// DefaultKeyMap returns the default key bindings
-func DefaultKeyMap() KeyMap {
-	return KeyMap{
+// DefaultGlobalKeyMap returns default global key bindings
+func DefaultGlobalKeyMap() GlobalKeyMap {
+	return GlobalKeyMap{
+		Back: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "back"),
+		),
+		Quit: key.NewBinding(
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
+		),
+	}
+}
+
+// WelcomeModel represents the welcome/startup screen
+type WelcomeModel struct {
+	cursor   int
+	options  []string
+	selected int
+	keys     WelcomeKeyMap
+}
+
+type WelcomeKeyMap struct {
+	Up     key.Binding
+	Down   key.Binding
+	Enter  key.Binding
+	Number key.Binding
+}
+
+func DefaultWelcomeKeyMap() WelcomeKeyMap {
+	return WelcomeKeyMap{
 		Up: key.NewBinding(
 			key.WithKeys("up", "k"),
 			key.WithHelp("↑/k", "move up"),
@@ -48,441 +86,502 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("down", "j"),
 			key.WithHelp("↓/j", "move down"),
 		),
-		Expand: key.NewBinding(
-			key.WithKeys("enter", " "),
-			key.WithHelp("enter/space", "expand/collapse"),
+		Enter: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "select"),
 		),
-		Collapse: key.NewBinding(
-			key.WithKeys("c"),
-			key.WithHelp("c", "collapse all"),
-		),
-		ScrollUp: key.NewBinding(
-			key.WithKeys("shift+up", "K"),
-			key.WithHelp("shift+↑/K", "scroll up"),
-		),
-		ScrollDown: key.NewBinding(
-			key.WithKeys("shift+down", "J"),
-			key.WithHelp("shift+↓/J", "scroll down"),
-		),
-		PageUp: key.NewBinding(
-			key.WithKeys("pgup", "ctrl+u"),
-			key.WithHelp("pgup/ctrl+u", "page up"),
-		),
-		PageDown: key.NewBinding(
-			key.WithKeys("pgdown", "ctrl+d"),
-			key.WithHelp("pgdn/ctrl+d", "page down"),
-		),
-		Quit: key.NewBinding(
-			key.WithKeys("q", "ctrl+c"),
-			key.WithHelp("q", "quit"),
+		Number: key.NewBinding(
+			key.WithKeys("1", "2", "3", "4"),
+			key.WithHelp("1-4", "quick select"),
 		),
 	}
 }
 
-// NewResultsModel creates a new results model
-func NewResultsModel(result *runner.RunResult) *ResultsModel {
-	expanded := make(map[int]bool)
-	// Start with first worker expanded by default
-	if len(result.Workers) > 0 {
-		expanded[0] = true
+// InputModel represents the command input screen
+type InputModel struct {
+	textInput textinput.Model
+	history   []string
+	cursor    int
+	keys      InputKeyMap
+}
+
+type InputKeyMap struct {
+	Submit key.Binding
+	Clear  key.Binding
+	Up     key.Binding
+	Down   key.Binding
+}
+
+func DefaultInputKeyMap() InputKeyMap {
+	return InputKeyMap{
+		Submit: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "run command"),
+		),
+		Clear: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("ctrl+l", "clear"),
+		),
+		Up: key.NewBinding(
+			key.WithKeys("up"),
+			key.WithHelp("↑", "history up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down"),
+			key.WithHelp("↓", "history down"),
+		),
+	}
+}
+
+// NewModel creates a new main application model
+func NewModel() *Model {
+	// Create welcome model
+	welcomeModel := &WelcomeModel{
+		cursor: 0,
+		options: []string{
+			"Run /init to create a CLAUDE.md file with instructions for Claude",
+			"Use Claude to help with file analysis, editing, bash commands and git",
+			"Be as specific as you would with another engineer for the best results",
+			"✓ Run /terminal-setup to set up terminal integration",
+		},
+		keys: DefaultWelcomeKeyMap(),
 	}
 
-	return &ResultsModel{
-		result:   result,
-		cursor:   0,
-		expanded: expanded,
-		keys:     DefaultKeyMap(),
+	// Create input model
+	ti := textinput.New()
+	ti.Placeholder = `Try "write a test for <filepath>"`
+	ti.Focus()
+	ti.CharLimit = 500
+	ti.Width = 80
+
+	inputModel := &InputModel{
+		textInput: ti,
+		history:   []string{},
+		keys:      DefaultInputKeyMap(),
+	}
+
+	return &Model{
+		state:        StateWelcome,
+		welcomeModel: welcomeModel,
+		inputModel:   inputModel,
+		keys:         DefaultGlobalKeyMap(),
 	}
 }
 
 // Init implements bubbletea.Model
-func (m *ResultsModel) Init() tea.Cmd {
-	return nil
+func (m *Model) Init() tea.Cmd {
+	return textinput.Blink
 }
 
 // Update implements bubbletea.Model
-func (m *ResultsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// Update child models
+		if m.resultsModel != nil {
+			m.resultsModel.width = msg.Width
+			m.resultsModel.height = msg.Height
+		}
+
 		return m, nil
 
 	case tea.KeyMsg:
+		// Global key handling
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
-
-		case key.Matches(msg, m.keys.Up):
-			if m.cursor > 0 {
-				m.cursor--
+		case key.Matches(msg, m.keys.Back):
+			if m.state == StateResults {
+				m.state = StateInput
+				return m, nil
+			} else if m.state == StateInput {
+				m.state = StateWelcome
+				return m, nil
 			}
+		}
 
-		case key.Matches(msg, m.keys.Down):
-			maxCursor := len(m.result.Workers) - 1
-			if m.result.Consensus != nil {
-				maxCursor++ // Include consensus section
-			}
-			if m.cursor < maxCursor {
-				m.cursor++
-			}
-
-		case key.Matches(msg, m.keys.Expand):
-			// Only expand/collapse worker sections (not consensus)
-			if m.cursor < len(m.result.Workers) {
-				m.expanded[m.cursor] = !m.expanded[m.cursor]
-			}
-
-		case key.Matches(msg, m.keys.Collapse):
-			// Collapse all worker sections
-			for i := range m.result.Workers {
-				m.expanded[i] = false
-			}
-
-		case key.Matches(msg, m.keys.ScrollUp):
-			if m.scrollOffset > 0 {
-				m.scrollOffset--
-			}
-
-		case key.Matches(msg, m.keys.ScrollDown):
-			maxScroll := m.totalHeight - m.height + 3 // Leave room for footer
-			if maxScroll > 0 && m.scrollOffset < maxScroll {
-				m.scrollOffset++
-			}
-
-		case key.Matches(msg, m.keys.PageUp):
-			pageSize := m.height / 3
-			m.scrollOffset -= pageSize
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
-
-		case key.Matches(msg, m.keys.PageDown):
-			pageSize := m.height / 3
-			maxScroll := m.totalHeight - m.height + 3
-			m.scrollOffset += pageSize
-			if maxScroll > 0 && m.scrollOffset > maxScroll {
-				m.scrollOffset = maxScroll
+		// State-specific key handling
+		switch m.state {
+		case StateWelcome:
+			return m.updateWelcome(msg)
+		case StateInput:
+			return m.updateInput(msg)
+		case StateResults:
+			if m.resultsModel != nil {
+				var updatedModel tea.Model
+				updatedModel, cmd = m.resultsModel.Update(msg)
+				m.resultsModel = updatedModel.(*ResultsModel)
+				return m, cmd
 			}
 		}
 	}
 
+	return m, cmd
+}
+
+// updateWelcome handles welcome screen updates
+func (m *Model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.welcomeModel.keys.Up):
+		if m.welcomeModel.cursor > 0 {
+			m.welcomeModel.cursor--
+		}
+	case key.Matches(msg, m.welcomeModel.keys.Down):
+		if m.welcomeModel.cursor < len(m.welcomeModel.options)-1 {
+			m.welcomeModel.cursor++
+		}
+	case key.Matches(msg, m.welcomeModel.keys.Enter):
+		m.state = StateInput
+		return m, nil
+	case key.Matches(msg, m.welcomeModel.keys.Number):
+		if num := msg.String(); num >= "1" && num <= "4" {
+			m.state = StateInput
+			return m, nil
+		}
+	}
 	return m, nil
 }
 
+// updateInput handles input screen updates
+func (m *Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch {
+	case key.Matches(msg, m.inputModel.keys.Submit):
+		// Simulate command execution
+		input := m.inputModel.textInput.Value()
+		if input != "" {
+			// Add to history
+			m.inputModel.history = append(m.inputModel.history, input)
+
+			// Create mock result for demonstration
+			result := m.createMockResult(input)
+			m.resultsModel = NewResultsModel(result)
+			m.state = StateResults
+
+			// Clear input
+			m.inputModel.textInput.SetValue("")
+		}
+		return m, nil
+
+	case key.Matches(msg, m.inputModel.keys.Clear):
+		m.inputModel.textInput.SetValue("")
+		return m, nil
+
+	case key.Matches(msg, m.inputModel.keys.Up):
+		if len(m.inputModel.history) > 0 && m.inputModel.cursor < len(m.inputModel.history) {
+			m.inputModel.cursor++
+			idx := len(m.inputModel.history) - m.inputModel.cursor
+			m.inputModel.textInput.SetValue(m.inputModel.history[idx])
+		}
+		return m, nil
+
+	case key.Matches(msg, m.inputModel.keys.Down):
+		if m.inputModel.cursor > 0 {
+			m.inputModel.cursor--
+			if m.inputModel.cursor == 0 {
+				m.inputModel.textInput.SetValue("")
+			} else {
+				idx := len(m.inputModel.history) - m.inputModel.cursor
+				m.inputModel.textInput.SetValue(m.inputModel.history[idx])
+			}
+		}
+		return m, nil
+	}
+
+	// Update text input
+	m.inputModel.textInput, cmd = m.inputModel.textInput.Update(msg)
+	return m, cmd
+}
+
 // View implements bubbletea.Model
-func (m *ResultsModel) View() string {
+func (m *Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
 
-	var sections []string
-
-	// Header
-	sections = append(sections, m.renderHeader())
-
-	// Worker responses
-	for i, worker := range m.result.Workers {
-		sections = append(sections, m.renderWorker(i, worker))
-	}
-
-	// Consensus
-	if m.result.Consensus != nil {
-		sections = append(sections, m.renderConsensus())
-	}
-
-	// Join all content
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
-
-	// Calculate total height for scrolling
-	contentLines := strings.Split(content, "\n")
-	m.totalHeight = len(contentLines)
-
-	// Apply scrolling
-	if m.scrollOffset > 0 {
-		if m.scrollOffset >= len(contentLines) {
-			contentLines = []string{}
-		} else {
-			contentLines = contentLines[m.scrollOffset:]
+	switch m.state {
+	case StateWelcome:
+		return m.renderWelcome()
+	case StateInput:
+		return m.renderInput()
+	case StateResults:
+		if m.resultsModel != nil {
+			return m.resultsModel.View()
 		}
+		return "No results to display"
 	}
 
-	// Limit to viewport height (leave space for footer)
-	viewportHeight := m.height - 2 // Reserve space for footer
-	if len(contentLines) > viewportHeight {
-		contentLines = contentLines[:viewportHeight]
-	}
-
-	scrolledContent := strings.Join(contentLines, "\n")
-
-	// Add footer with help and scroll indicator
-	footer := m.renderFooter()
-
-	return lipgloss.JoinVertical(lipgloss.Left, scrolledContent, footer)
+	return "Unknown state"
 }
 
-// renderHeader renders the summary header
-func (m *ResultsModel) renderHeader() string {
+// renderWelcome renders the welcome screen
+func (m *Model) renderWelcome() string {
+	// Header
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("39")). // Bright blue
+		Foreground(lipgloss.Color("39")).
 		Background(lipgloss.Color("235")).
 		Padding(1, 2).
-		Width(m.width - 4).
+		Width(m.width).
 		Align(lipgloss.Center)
 
-	successIcon := "✅"
-	if !m.result.Success {
-		successIcon = "❌"
-	}
+	header := headerStyle.Render("🚀 DEVGRU - AI-Powered Development Assistant")
 
-	content := fmt.Sprintf("%s DEVGRU RESULTS %s\n", successIcon, successIcon)
-	content += fmt.Sprintf("Duration: %v • Tokens: %d • Cost: $%.6f",
-		m.result.TotalDuration.Round(time.Millisecond),
-		m.result.TotalTokens,
-		m.result.EstimatedCost)
+	// Title
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("214")).
+		Padding(2, 0).
+		Align(lipgloss.Center)
 
-	return headerStyle.Render(content)
-}
+	title := titleStyle.Render("Tips for getting started:")
 
-// renderWorker renders a single worker section
-func (m *ResultsModel) renderWorker(index int, worker runner.WorkerResult) string {
-	isSelected := m.cursor == index
-	isExpanded := m.expanded[index]
+	// Options
+	var options []string
+	for i, option := range m.welcomeModel.options {
+		style := lipgloss.NewStyle().
+			Padding(0, 4).
+			Foreground(lipgloss.Color("252"))
 
-	// Determine styling based on state
-	var headerStyle lipgloss.Style
-	if isSelected {
-		headerStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("15")). // White
-			Background(lipgloss.Color("63")). // Purple
-			Padding(0, 2)
-	} else {
-		headerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("247")). // Light gray
-			Background(lipgloss.Color("236")).
-			Padding(0, 2)
-	}
-
-	// Status icon and basic info
-	statusIcon := "✅"
-	statusColor := lipgloss.Color("46") // Green
-	if worker.Error != nil {
-		statusIcon = "❌"
-		statusColor = lipgloss.Color("196") // Red
-	}
-
-	// Expansion indicator
-	expandIcon := "▶"
-	if isExpanded {
-		expandIcon = "▼"
-	}
-
-	// Build header line
-	headerText := fmt.Sprintf("%s %s %s", expandIcon, statusIcon, worker.WorkerID)
-	if worker.Stats != nil {
-		headerText += fmt.Sprintf(" (%s, %v)",
-			worker.Stats.Model,
-			worker.Stats.Duration.Round(time.Millisecond))
-	}
-
-	if worker.TokensUsed != nil {
-		headerText += fmt.Sprintf(" • %d tokens • $%.6f",
-			worker.TokensUsed.TotalTokens,
-			worker.Stats.EstimatedCost)
-	}
-
-	// Add average score if available
-	if len(worker.JudgeResults) > 0 {
-		headerText += fmt.Sprintf(" • Score: %.1f/10", worker.AverageScore)
-	}
-
-	header := headerStyle.Width(m.width - 4).Render(headerText)
-
-	// If not expanded, just return header
-	if !isExpanded {
-		return header
-	}
-
-	// Expanded content
-	contentStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")).
-		Background(lipgloss.Color("234")).
-		Padding(1, 2).
-		Width(m.width - 8).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(statusColor)
-
-	var content string
-	if worker.Error != nil {
-		content = fmt.Sprintf("Error: %v", worker.Error)
-	} else {
-		content = worker.Content
-
-		// Add judge results if available
-		if len(worker.JudgeResults) > 0 {
-			content += "\n\n" + m.renderJudgeResults(worker.JudgeResults, worker.AverageScore)
+		if i == m.welcomeModel.cursor {
+			style = style.
+				Bold(true).
+				Foreground(lipgloss.Color("15")).
+				Background(lipgloss.Color("63"))
 		}
 
-		// Wrap long content
-		if len(content) > m.width-12 {
-			content = wrapText(content, m.width-12)
-		}
+		prefix := fmt.Sprintf("%d. ", i+1)
+		options = append(options, style.Render(prefix+option))
 	}
 
-	expandedContent := contentStyle.Render(content)
+	optionsContent := lipgloss.JoinVertical(lipgloss.Left, options...)
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, expandedContent)
-}
+	// Tip
+	tipStyle := lipgloss.NewStyle().
+		Italic(true).
+		Foreground(lipgloss.Color("241")).
+		Padding(2, 4)
 
-// renderConsensus renders the consensus section
-func (m *ResultsModel) renderConsensus() string {
-	consensus := m.result.Consensus
-	isSelected := m.cursor == len(m.result.Workers)
+	tip := tipStyle.Render("💡 Tip: Start with small features or bug fixes, tell Claude to propose a plan, and verify its suggested edits")
 
-	var style lipgloss.Style
-	if isSelected {
-		style = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("15")).  // White
-			Background(lipgloss.Color("202")). // Orange
-			Padding(1, 2)
-	} else {
-		style = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("214")). // Yellow
-			Background(lipgloss.Color("237")).
-			Padding(1, 2)
-	}
-
-	title := "🏆 CONSENSUS RESULT"
-	var content strings.Builder
-	content.WriteString(fmt.Sprintf("%s\n\n", title))
-
-	// Basic info
-	content.WriteString(fmt.Sprintf("Algorithm: %s\n", consensus.Algorithm))
-	content.WriteString(fmt.Sprintf("Winner: %s\n", consensus.Winner))
-	content.WriteString(fmt.Sprintf("Confidence: %.2f\n", consensus.Confidence))
-	content.WriteString(fmt.Sprintf("Participants: %d\n", consensus.Participants))
-
-	if consensus.Reasoning != "" {
-		content.WriteString("\nReasoning:\n")
-		wrappedReasoning := wrapText(consensus.Reasoning, m.width-8)
-		content.WriteString(wrappedReasoning)
-		content.WriteString("\n")
-	}
-
-	content.WriteString("\nFinal Answer:\n")
-
-	// Word wrap the final answer to prevent horizontal scrolling
-	finalAnswer := consensus.Content
-	if len(finalAnswer) > 0 {
-		wrappedAnswer := wrapText(finalAnswer, m.width-8)
-		content.WriteString(wrappedAnswer)
-	}
-
-	return style.Width(m.width - 4).Render(content.String())
-}
-
-// renderFooter renders the help footer with scroll indicators
-func (m *ResultsModel) renderFooter() string {
+	// Footer
 	footerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")). // Dark gray
+		Foreground(lipgloss.Color("241")).
 		Background(lipgloss.Color("233")).
-		Padding(0, 2).
-		Width(m.width - 4)
+		Padding(1, 2).
+		Width(m.width).
+		Align(lipgloss.Center)
 
-	// Build help text
-	help := "↑/↓: navigate • enter/space: expand/collapse • c: collapse all"
+	footer := footerStyle.Render("↑/↓: navigate • enter: continue • 1-4: quick select • ctrl+c: quit")
 
-	// Add scroll indicators if content is scrollable
-	maxScroll := m.totalHeight - m.height + 3
-	if maxScroll > 0 {
-		help += " • Shift+↑/↓: scroll • PgUp/PgDn: page"
+	// Combine all sections
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		header,
+		"",
+		title,
+		"",
+		optionsContent,
+		"",
+		tip,
+	)
 
-		// Add scroll position indicator
-		scrollPercent := float64(m.scrollOffset) / float64(maxScroll) * 100
-		help += fmt.Sprintf(" • Scroll: %d%% (%d/%d)", int(scrollPercent), m.scrollOffset, maxScroll)
+	// Center the content vertically
+	availableHeight := m.height - lipgloss.Height(footer) - 2
+	contentHeight := lipgloss.Height(content)
+	paddingTop := (availableHeight - contentHeight) / 2
+	if paddingTop < 0 {
+		paddingTop = 0
 	}
 
-	help += " • q: quit"
+	paddedContent := lipgloss.NewStyle().
+		PaddingTop(paddingTop).
+		Width(m.width).
+		Render(content)
 
-	return footerStyle.Render(help)
+	return lipgloss.JoinVertical(lipgloss.Left, paddedContent, footer)
 }
 
-// renderJudgeResults renders the judge evaluation results
-func (m *ResultsModel) renderJudgeResults(judgeResults []runner.JudgeResult, averageScore float64) string {
-	if len(judgeResults) == 0 {
-		return ""
-	}
+// renderInput renders the input screen
+func (m *Model) renderInput() string {
+	// Header
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("39")).
+		Background(lipgloss.Color("235")).
+		Padding(1, 2).
+		Width(m.width).
+		Align(lipgloss.Center)
 
-	judgeStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("214")). // Yellow
-		Bold(true)
+	header := headerStyle.Render("🤖 Claude Development Assistant")
 
-	var content strings.Builder
-	content.WriteString(judgeStyle.Render("📊 JUDGE EVALUATIONS"))
-	content.WriteString(fmt.Sprintf(" (Average: %.1f/10)\n", averageScore))
+	// Input section
+	inputStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(1, 2).
+		Width(m.width-8).
+		Margin(2, 4)
 
-	for _, result := range judgeResults {
-		scoreColor := lipgloss.Color("196") // Red
-		if result.Score >= 7 {
-			scoreColor = lipgloss.Color("46") // Green
-		} else if result.Score >= 5 {
-			scoreColor = lipgloss.Color("214") // Yellow
+	promptStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("214")).
+		MarginBottom(1)
+
+	prompt := promptStyle.Render("> 🔥")
+	inputField := m.inputModel.textInput.View()
+	inputContent := lipgloss.JoinVertical(lipgloss.Left, prompt, inputField)
+
+	inputSection := inputStyle.Render(inputContent)
+
+	// History section (if available)
+	var historySection string
+	if len(m.inputModel.history) > 0 {
+		historyStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			Padding(1, 4)
+
+		recentCommands := "Recent commands:"
+		historyItems := []string{recentCommands}
+
+		// Show last 3 commands
+		start := len(m.inputModel.history) - 3
+		if start < 0 {
+			start = 0
 		}
 
-		scoreStyle := lipgloss.NewStyle().Foreground(scoreColor).Bold(true)
-
-		content.WriteString(fmt.Sprintf("• %s: ", result.JudgeID))
-		content.WriteString(scoreStyle.Render(fmt.Sprintf("%d/10", result.Score)))
-		content.WriteString(fmt.Sprintf(" (%v)\n", result.Duration.Round(time.Millisecond)))
-
-		if result.Reason != "" {
-			// Wrap the reason text
-			wrappedReason := wrapText(result.Reason, m.width-16)
-			lines := strings.Split(wrappedReason, "\n")
-			for _, line := range lines {
-				content.WriteString(fmt.Sprintf("  %s\n", line))
-			}
+		for i := start; i < len(m.inputModel.history); i++ {
+			historyItems = append(historyItems, fmt.Sprintf("  • %s", m.inputModel.history[i]))
 		}
-		content.WriteString("\n")
+
+		historySection = historyStyle.Render(strings.Join(historyItems, "\n"))
 	}
 
-	return content.String()
+	// Shortcuts section
+	shortcutStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Padding(1, 4)
+
+	shortcuts := shortcutStyle.Render("💡 for shortcuts")
+
+	// Footer
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Background(lipgloss.Color("233")).
+		Padding(1, 2).
+		Width(m.width).
+		Align(lipgloss.Center)
+
+	footer := footerStyle.Render("enter: run • ctrl+l: clear • ↑/↓: history • esc: back • ctrl+c: quit")
+
+	// Combine sections
+	sections := []string{header, "", inputSection}
+
+	if historySection != "" {
+		sections = append(sections, historySection)
+	}
+
+	sections = append(sections, shortcuts)
+
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	// Center vertically
+	availableHeight := m.height - lipgloss.Height(footer) - 2
+	contentHeight := lipgloss.Height(content)
+	paddingTop := (availableHeight - contentHeight) / 2
+	if paddingTop < 0 {
+		paddingTop = 0
+	}
+
+	paddedContent := lipgloss.NewStyle().
+		PaddingTop(paddingTop).
+		Width(m.width).
+		Render(content)
+
+	return lipgloss.JoinVertical(lipgloss.Left, paddedContent, footer)
 }
 
-// wrapText wraps text to the specified width
-func wrapText(text string, width int) string {
-	if width <= 0 {
-		return text
+// createMockResult creates a mock result for demonstration
+func (m *Model) createMockResult(input string) *runner.RunResult {
+	return &runner.RunResult{
+		Success:       true,
+		TotalDuration: time.Second * 2,
+		TotalTokens:   1500,
+		EstimatedCost: 0.002500,
+		Workers: []runner.WorkerResult{
+			{
+				WorkerID: "claude-3-5-sonnet",
+				Content:  fmt.Sprintf("Here's a comprehensive response to your request: %s\n\nI'll help you implement this feature with proper error handling, tests, and documentation. Let me break this down into manageable steps...", input),
+				Stats: &runner.WorkerStats{
+					Model:         "claude-3-5-sonnet-20241022",
+					Duration:      time.Millisecond * 1800,
+					EstimatedCost: 0.002000,
+				},
+				TokensUsed: &runner.TokenUsage{
+					TotalTokens: 1200,
+				},
+				JudgeResults: []runner.JudgeResult{
+					{
+						JudgeID:  "quality-judge",
+						Score:    8,
+						Duration: time.Millisecond * 200,
+						Reason:   "Comprehensive response with good structure and clear explanation of the implementation approach.",
+					},
+					{
+						JudgeID:  "accuracy-judge",
+						Score:    9,
+						Duration: time.Millisecond * 150,
+						Reason:   "Technically accurate and follows best practices. Includes proper error handling.",
+					},
+				},
+				AverageScore: 8.5,
+			},
+			{
+				WorkerID: "gpt-4",
+				Content:  fmt.Sprintf("Alternative approach for: %s\n\nI suggest a slightly different implementation that focuses on performance and maintainability...", input),
+				Stats: &runner.WorkerStats{
+					Model:         "gpt-4-turbo",
+					Duration:      time.Millisecond * 1500,
+					EstimatedCost: 0.001800,
+				},
+				TokensUsed: &runner.TokenUsage{
+					TotalTokens: 900,
+				},
+				JudgeResults: []runner.JudgeResult{
+					{
+						JudgeID:  "quality-judge",
+						Score:    7,
+						Duration: time.Millisecond * 180,
+						Reason:   "Good alternative approach but lacks some implementation details.",
+					},
+				},
+				AverageScore: 7.0,
+			},
+		},
+		Consensus: &runner.ConsensusResult{
+			Algorithm:    "weighted-scoring",
+			Winner:       "claude-3-5-sonnet",
+			Confidence:   0.85,
+			Participants: 2,
+			Reasoning:    "Claude 3.5 Sonnet provided a more comprehensive response with better structure and more detailed implementation guidance. The response included proper error handling and testing considerations.",
+			Content:      fmt.Sprintf("Based on the analysis, here's the recommended approach for: %s\n\nThe winning solution combines the best aspects of both responses, emphasizing comprehensive implementation with proper testing and documentation.", input),
+		},
 	}
+}
 
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return text
-	}
+// SetResult allows setting a result externally
+func (m *Model) SetResult(result *runner.RunResult) {
+	m.resultsModel = NewResultsModel(result)
+	m.state = StateResults
+}
 
-	var lines []string
-	var currentLine strings.Builder
-
-	for _, word := range words {
-		// If adding this word would exceed width, start new line
-		if currentLine.Len() > 0 && currentLine.Len()+1+len(word) > width {
-			lines = append(lines, currentLine.String())
-			currentLine.Reset()
-		}
-
-		if currentLine.Len() > 0 {
-			currentLine.WriteString(" ")
-		}
-		currentLine.WriteString(word)
-	}
-
-	if currentLine.Len() > 0 {
-		lines = append(lines, currentLine.String())
-	}
-
-	return strings.Join(lines, "\n")
+// GetCurrentState returns the current application state
+func (m *Model) GetCurrentState() AppState {
+	return m.state
 }
