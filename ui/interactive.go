@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"strings"
 	"time"
@@ -16,6 +17,9 @@ import (
 	"github.com/evisdrenova/devgru/internal/ide"
 	"github.com/evisdrenova/devgru/internal/runner"
 )
+
+//go:embed devgru_logo.txt
+var devgruLogo string
 
 // AppState represents the current state of the application
 type AppState int
@@ -364,6 +368,14 @@ func (m *InteractiveModel) renderInput() string {
 		Padding(0, 4).
 		Width(m.width)
 
+	logoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("208")). // Orange fire color
+		Align(lipgloss.Center).
+		Width(m.width).
+		Padding(1, 0)
+
+	logo := logoStyle.Render(devgruLogo)
+
 	// Left side: VS Code status + Workers info
 	var leftStatus string
 	if m.ideServer != nil && m.ideServer.IsConnected() {
@@ -473,7 +485,7 @@ func (m *InteractiveModel) renderInput() string {
 	footer := footerStyle.Render("enter: run • ctrl+l: clear • ↑/↓: history • ctrl+c: quit")
 
 	// Combine sections - removed config info and file section, added status line above input
-	sections := []string{"", statusLineRendered, inputSection}
+	sections := []string{logo, "", statusLineRendered, inputSection}
 
 	if historySection != "" {
 		sections = append(sections, historySection)
