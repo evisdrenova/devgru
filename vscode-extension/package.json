@@ -94,14 +94,18 @@
   "scripts": {
     "vscode:prepublish": "npm run compile && npx esbuild out/extension.js --bundle --platform=node --target=node16  --external:vscode --outfile=out/extension.js --allow-overwrite",
     "compile": "tsc -p ./",
+    "package": "vsce package --out devgru-code-$(node -p \"require('./package.json').version\").vsix",
     "watch": "tsc -watch -p ./",
     "lint": "echo \"No lint configured\"",
     "test": "echo \"No tests yet\""
   },
   "devDependencies": {
-    "@types/node": "16.x",
+    "@vscode/vsce": "^2.19.0",
     "@types/vscode": "^1.74.0",
-    "@types/ws": "^8.18.1",
+    "@types/node": "16.x",
+    "@typescript-eslint/eslint-plugin": "^5.45.0",
+    "@typescript-eslint/parser": "^5.45.0",
+    "eslint": "^8.28.0",
     "typescript": "^4.9.4"
   },
   "dependencies": {

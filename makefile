@@ -1,101 +1,118 @@
-.PHONY: build clean test install dev help
+EXT_VERSION := $(shell node -p "require('./vscode-extension/package.json').version")
 
-# Default target
-help: ## Show this help message
-	@echo "DevGru Monorepo Commands:"
-	@echo ""
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+# Makefile for DevGru
+.PHONY: build clean install test run dev extension-build extension-install reload-vscode dev-build help
 
-# Build commands
-build: build-go build-extension ## Build everything
-	@echo "✅ Build complete!"
+# Development build - builds everything and reloads VS Code
+dev-build: go-build extension-build extension-install reload-vscode
+	@echo "🚀 Development build complete! VS Code should reload automatically."
 
-build-go: ## Build Go CLI binary
-	@echo "🔨 Building Go binary..."
-	@go build -o bin/devgru ./cmd/devgru
-	@echo "✅ Go binary built: bin/devgru"
+# Default target - production build
+build: go-build extension-build
 
-build-extension: ## Build VS Code extension
-	@echo "🔨 Building VS Code extension..."
-	@cd vscode-extension && npm run compile
-	@echo "✅ Extension built"
+# Build Go binary
+go-build:
+	@echo "🔨 Building DevGru binary..."
+	@mkdir -p bin
+	go build -o bin/devgru ./cmd/devgru
+	@echo "✅ Go binary built successfully"
 
-package-extension: ## Package VS Code extension as VSIX
-	@echo "📦 Packaging VS Code extension..."
-	@./scripts/build-extension.sh
 
-# Development commands
-dev: ## Start development mode (watches for changes)
-	@echo "🚀 Starting development mode..."
-	@make build-go
-	@cd vscode-extension && npm run watch &
-	@echo "👀 Watching for changes..."
+# Build VS Code extension
+extension-build:
+	@echo "🔨 Building DevGru VS Code Extension v$(EXT_VERSION)…"
+	@if [ -d "vscode-extension" ]; then \
+	  cd vscode-extension && \
+	  npm install --silent && \
+	  npx vsce package --out devgru-code-$(EXT_VERSION).vsix && \
+	  echo "✅ VS Code extension built successfully: devgru-code-$(EXT_VERSION).vsix"; \
+	else \
+	  echo "❌ vscode-extension directory not found"; \
+	 exit 1; \
+	fi
+# Install/update VS Code extension
+extension-install: extension-build
+	@echo "📦 Installing VS Code extension..."
+	@cd vscode-extension && \
+	if ls devgru-code-*.vsix >/dev/null 2>&1; then \
+	  VSIX_FILE=$$(ls devgru-code-*.vsix | head -1); \
+	  echo "Installing: $$VSIX_FILE"; \
+	  code --install-extension "$$VSIX_FILE" --force; \
+	  echo "✅ VS Code extension installed successfully"; \
+	else \
+	  echo "❌ No .vsix package found in vscode-extension/"; \
+	  ls -1 | grep --color=never "\.vsix$$" || echo "(none)"; \
+	  exit 1; \
+	fi
 
-install: ## Install all dependencies
-	@echo "📦 Installing dependencies..."
-	@go mod download
-	@npm install
-	@echo "✅ Dependencies installed"
+# Reload VS Code window
+reload-vscode:
+	@echo "🔄 Reloading VS Code window..."
+	@osascript -e 'tell application "Visual Studio Code" to activate' > /dev/null 2>&1 || true
+	@sleep 0.5
+	@osascript -e 'tell application "System Events" to tell process "Visual Studio Code" to keystroke "r" using {command down, shift down}' > /dev/null 2>&1 || true
+	@echo "✅ VS Code reload triggered"
 
-# Testing commands
-test: test-go test-extension ## Run all tests
+# Fast development cycle - watch for changes and rebuild
+dev-watch:
+	@echo "👀 Watching for changes... (Press Ctrl+C to stop)"
+	@while true; do \
+		fswatch -1 . --exclude=".git" --exclude="node_modules" --exclude="bin" --exclude="*.vsix" && \
+		echo "🔄 Changes detected, rebuilding..." && \
+		make dev-build && \
+		echo "⏱️  Waiting for next change..."; \
+	done
 
-test-go: ## Run Go tests
-	@echo "🧪 Running Go tests..."
-	@go test ./...
+# Build the UI components (if you have any UI build steps)
+ui-build:
+	@echo "🔨 Building UI components..."
+	# Add any UI build steps here if needed
+	# For now, this ensures the ui package is included
+	go build -o /dev/null ./ui
+	@echo "✅ UI components built successfully"
 
-test-extension: ## Run extension tests
-	@echo "🧪 Running extension tests..."
-	@cd vscode-extension && npm test
+# Install binary to system PATH
+install: build
+	@echo "📦 Installing DevGru to system PATH..."
+	sudo cp bin/devgru /usr/local/bin/
+	@echo "✅ DevGru installed to /usr/local/bin/"
 
-# Quality commands
-lint: ## Run linters
-	@echo "🔍 Linting Go code..."
-	@go vet ./...
-	@echo "🔍 Linting TypeScript code..."
-	@cd vscode-extension && npm run lint
+# Run tests
+test:
+	@echo "🧪 Running tests..."
+	go test ./...
 
-format: ## Format code
-	@echo "✨ Formatting Go code..."
-	@go fmt ./...
-	@echo "✨ Formatting TypeScript code..."
-	@cd vscode-extension && npm run format
+# Run in development mode (with race detector)
+dev:
+	@echo "🏃 Running DevGru in development mode..."
+	go run -race ./cmd/devgru
 
-# Utility commands
-clean: ## Clean build artifacts
+# Run the built binary
+run: build
+	@echo "🏃 Running DevGru..."
+	./bin/devgru
+
+# Clean build artifacts
+clean:
 	@echo "🧹 Cleaning build artifacts..."
-	@rm -rf bin/
-	@rm -rf vscode-extension/out/
-	@rm -rf vscode-extension/*.vsix
+	rm -rf bin/
+	@if [ -d "vscode-extension" ]; then \
+		cd vscode-extension && rm -f *.vsix && rm -rf node_modules; \
+	fi
+	go clean
 	@echo "✅ Clean complete"
 
-run: build-go ## Build and run DevGru CLI
-	@echo "🚀 Running DevGru..."
-	@./bin/devgru
+# Setup development environment
+setup:
+	@echo "⚙️ Setting up development environment..."
+	@if [ -d "vscode-extension" ]; then \
+		cd vscode-extension && npm install; \
+	fi
+	go mod download
+	@echo "✅ Development environment ready"
 
-run-ide: build-go ## Build and run DevGru IDE server
-	@echo "🚀 Starting DevGru IDE server..."
-	@./bin/devgru ide connect
-
-# Release commands
-release: build package-extension ## Build everything for release
-	@echo "🚀 Release build complete!"
-	@echo "📁 CLI binary: bin/devgru"
-	@echo "📦 Extension: vscode-extension/*.vsix"
-
-# Docker commands (optional)
-docker-build: ## Build Docker image
-	@echo "🐳 Building Docker image..."
-	@docker build -t devgru:latest .
-
-# Installation helpers
-install-go-deps: ## Install Go dependencies
-	@go mod download
-
-install-node-deps: ## Install Node.js dependencies
-	@npm install
-
-install-extension: package-extension ## Install VS Code extension locally
-	@echo "📦 Installing VS Code extension..."
-	@cd vscode-extension && code --install-extension devgru-code-*.vsix
-	@echo "✅ Extension installed"
+# Quick rebuild just the binary (for faster iteration)
+quick:
+	@echo "⚡ Quick rebuild (binary only)..."
+	go build -o bin/devgru ./cmd/devgru
+	@echo "✅ Quick build complete"

@@ -603,6 +603,10 @@ func (m *InteractiveModel) pollIDEContext() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 		if m.ideServer != nil {
 			context := m.ideServer.GetContext()
+			// Add debug logging to see what context we're getting
+			if context.ActiveFile != m.ideContext.ActiveFile {
+				fmt.Printf("DEBUG: IDE context updated - ActiveFile: %s\n", context.ActiveFile)
+			}
 			return IDEContextUpdateMsg{context: context}
 		}
 		return IDEContextUpdateMsg{context: nil}

@@ -2,30 +2,6 @@ import * as vscode from "vscode";
 import WebSocket from "ws";
 import * as path from "path";
 
-interface DevGruMessage {
-  type: string;
-  timestamp: string;
-  data: any;
-}
-
-interface SelectionData {
-  type: "selection";
-  file: string;
-  text: string;
-  start_line: number;
-  end_line: number;
-  language?: string;
-}
-
-interface DiagnosticData {
-  type: "diagnostic";
-  file: string;
-  message: string;
-  line: number;
-  column: number;
-  severity: string;
-}
-
 export function activate(context: vscode.ExtensionContext) {
   console.log("DevGru extension is now active!");
 
@@ -78,8 +54,6 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Watch for DevGru handshake in terminal output
-  // Note: onDidWriteTerminalData is not available in all VS Code versions
-  // We'll use a different approach to detect handshake
   let terminalListener: vscode.Disposable | undefined;
 
   try {
@@ -97,15 +71,14 @@ export function activate(context: vscode.ExtensionContext) {
     );
   }
 
-  // Register disposables
   const disposables = [
     openPanelCommand,
     insertFileRefCommand,
     runPromptCommand,
     selectionListener,
     diagnosticListener,
-    devgruClient,
     activeEditorListener,
+    devgruClient,
   ];
 
   if (terminalListener) {
@@ -143,12 +116,27 @@ class DevGruClient implements vscode.Disposable {
 
     try {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-      this.ws = ws; // store once
+      this.ws = ws;
 
       ws.on("open", () => {
         console.log("Connected to DevGru");
         vscode.window.showInformationMessage("DevGru: Connected to server");
+
+        // Send workspace info first
         this.sendWorkspaceInfo();
+
+        // Then send current active file with delays to ensure server processes them
+        setTimeout(() => {
+          console.log("Sending current active file after connection...");
+          this.sendCurrentActiveFile();
+        }, 200);
+
+        // Send again after a longer delay as backup
+        setTimeout(() => {
+          console.log("Sending current active file (backup)...");
+          this.sendCurrentActiveFile();
+        }, 1000);
+
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
       });
 
@@ -191,7 +179,10 @@ class DevGruClient implements vscode.Disposable {
 
   private sendMessage(message: DevGruMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log("Sending message to DevGru:", message.type, message.data);
       this.ws.send(JSON.stringify(message));
+    } else {
+      console.log("Cannot send message - WebSocket not connected");
     }
   }
 
@@ -201,6 +192,8 @@ class DevGruClient implements vscode.Disposable {
       .filter((doc) => !doc.isUntitled)
       .map((doc) => vscode.workspace.asRelativePath(doc.uri));
 
+    console.log("Sending workspace info - open files:", openFiles);
+
     this.sendMessage({
       type: "workspace",
       timestamp: new Date().toISOString(),
@@ -209,13 +202,24 @@ class DevGruClient implements vscode.Disposable {
         open_files: openFiles,
       },
     });
+  }
 
-    // Send current active file
+  private sendCurrentActiveFile(): void {
+    console.log("sendCurrentActiveFile called");
+
     const activeEditor = vscode.window.activeTextEditor;
+    console.log("Active editor:", activeEditor ? "found" : "not found");
+
     if (activeEditor && !activeEditor.document.isUntitled) {
       const relativePath = vscode.workspace.asRelativePath(
         activeEditor.document.uri
       );
+
+      console.log("Sending current active file:", relativePath);
+      console.log("Document language:", activeEditor.document.languageId);
+      console.log("WebSocket state:", this.ws?.readyState);
+
+      // Send file change message
       this.sendMessage({
         type: "fileChange",
         timestamp: new Date().toISOString(),
@@ -224,6 +228,37 @@ class DevGruClient implements vscode.Disposable {
           language: activeEditor.document.languageId,
         },
       });
+
+      // Also send current selection if any
+      const selection = activeEditor.selection;
+      if (!selection.isEmpty) {
+        const selectedText = activeEditor.document.getText(selection);
+
+        console.log(
+          "Sending current selection:",
+          selectedText.substring(0, 50) + "..."
+        );
+
+        this.sendMessage({
+          type: "selection",
+          timestamp: new Date().toISOString(),
+          data: {
+            type: "selection",
+            file: relativePath,
+            text: selectedText,
+            start_line: selection.start.line + 1,
+            end_line: selection.end.line + 1,
+            language: activeEditor.document.languageId,
+          },
+        });
+      }
+    } else {
+      console.log(
+        "No active file to send - activeEditor:",
+        !!activeEditor,
+        "isUntitled:",
+        activeEditor?.document.isUntitled
+      );
     }
   }
 
@@ -457,6 +492,8 @@ class DevGruClient implements vscode.Disposable {
 
     const relativePath = vscode.workspace.asRelativePath(editor.document.uri);
     const language = editor.document.languageId;
+
+    console.log("Active editor changed to:", relativePath);
 
     // Send file change notification
     this.sendMessage({
