@@ -32,13 +32,13 @@ func (f *DefaultFactory) CreateProvider(config provider.ProviderConfig) (provide
 	case "openai":
 		return openai.NewClient(config)
 
-	case "anthropic":
-		// TODO: Implement Anthropic provider
-		return nil, fmt.Errorf("anthropic provider not yet implemented")
+	// case "anthropic":
+	// 	// TODO: Implement Anthropic provider
+	// 	return nil, fmt.Errorf("anthropic provider not yet implemented")
 
-	case "ollama":
-		// TODO: Implement Ollama provider
-		return nil, fmt.Errorf("ollama provider not yet implemented")
+	// case "ollama":
+	// 	// TODO: Implement Ollama provider
+	// 	return nil, fmt.Errorf("ollama provider not yet implemented")
 
 	default:
 		return nil, &provider.ProviderError{
@@ -150,14 +150,14 @@ func ValidateProvider(config provider.ProviderConfig) error {
 			}
 		}
 
-	case "ollama":
-		if config.Host == "" {
-			return &provider.ProviderError{
-				Provider: config.Kind,
-				Type:     provider.ErrorTypeValidation,
-				Message:  "host is required for ollama",
-			}
-		}
+	// case "ollama":
+	// 	if config.Host == "" {
+	// 		return &provider.ProviderError{
+	// 			Provider: config.Kind,
+	// 			Type:     provider.ErrorTypeValidation,
+	// 			Message:  "host is required for ollama",
+	// 		}
+	// 	}
 
 	default:
 		return &provider.ProviderError{

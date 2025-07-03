@@ -484,7 +484,7 @@ func (m *InteractiveModel) renderInput() string {
 
 			var statusInfo strings.Builder
 			statusInfo.WriteString("🔌 VS Code Integration Ready")
-			statusInfo.WriteString(fmt.Sprintf("\n📡 Listening on port %d", m.config.IDE.Port))
+			statusInfo.WriteString(fmt.Sprintf("\n📡 Listening on port %d", m.config.Ide.Port))
 
 			if !m.ideServer.IsConnected() {
 				statusInfo.WriteString("\n💡 Open VS Code and install DevGru extension to connect")

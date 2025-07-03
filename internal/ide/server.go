@@ -202,7 +202,6 @@ func (s *Server) processMessage(msg Message) {
 			s.context.Selection = nil
 		}
 	case "workspace":
-
 		if root, ok := msg.Data["root"].(string); ok {
 			s.context.WorkspaceRoot = root
 		}

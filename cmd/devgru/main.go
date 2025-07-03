@@ -43,8 +43,8 @@ func runInteractiveMode() {
 
 	ideConfig := ide.Config{
 		Enable:    true,
-		Transport: cfg.IDE.Transport,
-		DiffTool:  cfg.IDE.DiffTool,
+		Transport: cfg.Ide.Transport,
+		DiffTool:  cfg.Ide.DiffTool,
 		Port:      workspacePort,
 	}
 
@@ -55,7 +55,6 @@ func runInteractiveMode() {
 
 	go func() {
 		if err := ideServer.Start(ctx); err != nil {
-			// Don't exit on IDE server error, just log it
 			fmt.Printf("IDE server warning: %v\n", err)
 		}
 	}()

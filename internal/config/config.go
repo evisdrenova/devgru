@@ -13,7 +13,7 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
-// Config represents the complete poly configuration
+// the devgru config
 type Config struct {
 	Providers map[string]Provider `koanf:"providers"`
 	Workers   []Worker            `koanf:"workers"`
@@ -21,7 +21,7 @@ type Config struct {
 	Consensus Consensus           `koanf:"consensus"`
 	Cache     Cache               `koanf:"cache"`
 	Logging   Logging             `koanf:"logging"`
-	IDE       IDE                 `koanf:"ide`
+	Ide       IDE                 `koanf:"ide"`
 }
 
 // Provider defines configuration for an LLM provider
@@ -33,7 +33,7 @@ type Provider struct {
 	APIKey  string `koanf:"api_key"`  // will be populated from env vars
 }
 
-// Worker represents a configured LLM worker
+// Worker represents a configured LLM worker which is an instance of a provider
 type Worker struct {
 	ID           string  `koanf:"id"`
 	Provider     string  `koanf:"provider"`
@@ -92,7 +92,6 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to load environment variables: %w", err)
 	}
 
-	// Unmarshal into struct
 	var config Config
 	if err := k.Unmarshal("", &config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
@@ -165,14 +164,14 @@ func (c *Config) setDefaults() {
 	}
 
 	// IDE defaults
-	if c.IDE.Transport == "" {
-		c.IDE.Transport = "websocket"
+	if c.Ide.Transport == "" {
+		c.Ide.Transport = "websocket"
 	}
-	if c.IDE.DiffTool == "" {
-		c.IDE.DiffTool = "auto"
+	if c.Ide.DiffTool == "" {
+		c.Ide.DiffTool = "auto"
 	}
-	if c.IDE.Port == 0 {
-		c.IDE.Port = 8123
+	if c.Ide.Port == 0 {
+		c.Ide.Port = 8123
 	}
 
 	// Worker defaults
