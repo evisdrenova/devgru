@@ -365,7 +365,16 @@ func (m *InteractiveModel) renderInput() string {
 		Padding(0, 2).
 		Width(m.width)
 
-	tip := tipStyle.Render("💡 Tip: Start with small features or bug fixes, tell Claude to propose a plan, and verify its suggested edits")
+	var tipText string
+	if m.ideServer != nil && m.ideServer.IsConnected() {
+		tipText = "💡 VS Code connected! Your file context is automatically included in prompts."
+	} else if m.ideServer != nil {
+		tipText = "💡 VS Code integration ready! Install the DevGru extension to sync your file context."
+	} else {
+		tipText = "💡 Tip: Start with small features or bug fixes, tell Claude to propose a plan, and verify its suggested edits"
+	}
+
+	tip := tipStyle.Render(tipText)
 
 	// Input section
 	inputStyle := lipgloss.NewStyle().
@@ -428,51 +437,63 @@ func (m *InteractiveModel) renderInput() string {
 
 	// File info section - shows current file and selection from VS Code
 	var fileSection string
-	if m.ideServer != nil && m.ideServer.IsConnected() && m.ideContext.ActiveFile != "" {
-		fileStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
-			Background(lipgloss.Color("235")).
-			Padding(0, 2).
-			Margin(1, 4).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("39"))
+	if m.ideServer != nil {
+		if m.ideServer.IsConnected() && m.ideContext.ActiveFile != "" {
+			// Connected and has active file
+			fileStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
+				Background(lipgloss.Color("235")).
+				Padding(0, 2).
+				Margin(1, 4).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("39"))
 
-		var fileInfo strings.Builder
-		fileInfo.WriteString(fmt.Sprintf("📁 %s", m.ideContext.ActiveFile))
+			var fileInfo strings.Builder
+			fileInfo.WriteString(fmt.Sprintf("📁 %s", m.ideContext.ActiveFile))
 
-		// Show selection info if available
-		if m.ideContext.Selection != nil {
-			sel := m.ideContext.Selection
-			if sel.StartLine == sel.EndLine {
-				fileInfo.WriteString(fmt.Sprintf("\n🎯 Selection: L%d", sel.StartLine))
+			// Show selection info if available
+			if m.ideContext.Selection != nil {
+				sel := m.ideContext.Selection
+				if sel.StartLine == sel.EndLine {
+					fileInfo.WriteString(fmt.Sprintf("\n🎯 Selection: L%d", sel.StartLine))
+				} else {
+					fileInfo.WriteString(fmt.Sprintf("\n🎯 Selection: L%d-L%d", sel.StartLine, sel.EndLine))
+				}
+
+				// Show preview of selection (first 50 chars)
+				preview := strings.ReplaceAll(sel.Text, "\n", " ")
+				if len(preview) > 50 {
+					preview = preview[:50] + "..."
+				}
+				fileInfo.WriteString(fmt.Sprintf("\n💡 \"%s\"", preview))
+			}
+
+			// Show VS Code connection status
+			fileInfo.WriteString("\n✅ VS Code Connected")
+
+			fileSection = fileStyle.Render(fileInfo.String())
+		} else {
+			// IDE server running but VS Code not connected or no active file
+			statusStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")).
+				Background(lipgloss.Color("237")).
+				Padding(0, 2).
+				Margin(1, 4).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("214"))
+
+			var statusInfo strings.Builder
+			statusInfo.WriteString("🔌 VS Code Integration Ready")
+			statusInfo.WriteString(fmt.Sprintf("\n📡 Listening on port %d", m.config.IDE.Port))
+
+			if !m.ideServer.IsConnected() {
+				statusInfo.WriteString("\n💡 Open VS Code and install DevGru extension to connect")
 			} else {
-				fileInfo.WriteString(fmt.Sprintf("\n🎯 Selection: L%d-L%d", sel.StartLine, sel.EndLine))
+				statusInfo.WriteString("\n📂 Open a file in VS Code to see it here")
 			}
 
-			// Show preview of selection (first 50 chars)
-			preview := strings.ReplaceAll(sel.Text, "\n", " ")
-			if len(preview) > 50 {
-				preview = preview[:50] + "..."
-			}
-			fileInfo.WriteString(fmt.Sprintf("\n💡 \"%s\"", preview))
+			fileSection = statusStyle.Render(statusInfo.String())
 		}
-
-		// Show VS Code connection status
-		fileInfo.WriteString("\n🔌 VS Code Connected")
-
-		fileSection = fileStyle.Render(fileInfo.String())
-	} else if m.ideServer != nil && m.config.IDE.Enable {
-		// Show connection status when IDE is enabled but not connected
-		statusStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214")).
-			Background(lipgloss.Color("237")).
-			Padding(0, 2).
-			Margin(1, 4).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("214"))
-
-		statusInfo := fmt.Sprintf("🔌 VS Code: Waiting for connection on port %d", m.config.IDE.Port)
-		fileSection = statusStyle.Render(statusInfo)
 	}
 
 	// Footer

@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	// If no arguments, start interactive mode
+	// If no arguments, start interactive mode with auto IDE integration
 	if len(os.Args) == 1 {
 		runInteractiveMode()
 		return
@@ -25,7 +25,7 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: %s [command] [args...]\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nCommands:\n")
-		fmt.Fprintf(os.Stderr, "  (no args)        Start interactive mode\n")
+		fmt.Fprintf(os.Stderr, "  (no args)        Start interactive mode with VS Code integration\n")
 		fmt.Fprintf(os.Stderr, "  run <prompt>     Run a prompt through all workers\n")
 		fmt.Fprintf(os.Stderr, "  run --raw <prompt>  Run with raw JSON output\n")
 		fmt.Fprintf(os.Stderr, "  ide <subcommand> IDE integration commands\n")
@@ -48,7 +48,7 @@ func main() {
 	}
 }
 
-// runInteractiveMode starts the interactive TUI mode
+// runInteractiveMode starts the interactive TUI mode with auto IDE server
 func runInteractiveMode() {
 	// Load configuration
 	cfg, err := config.LoadDefault()
@@ -66,31 +66,37 @@ func runInteractiveMode() {
 	}
 	defer r.Close()
 
-	// Create IDE server if enabled
+	// Always create and start IDE server when in interactive mode
 	var ideServer *ide.Server
-	if cfg.IDE.Enable {
-		ideConfig := ide.Config{
-			Enable:    cfg.IDE.Enable,
-			Transport: cfg.IDE.Transport,
-			DiffTool:  cfg.IDE.DiffTool,
-			Port:      cfg.IDE.Port,
-		}
-		ideServer = ide.NewServer(ideConfig)
 
-		// Start IDE server in background
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		go func() {
-			if err := ideServer.Start(ctx); err != nil {
-				// Don't exit on IDE server error, just log it
-				fmt.Printf("IDE server warning: %v\n", err)
-			}
-		}()
-
-		fmt.Printf("🔌 VS Code integration server started on port %d\n", cfg.IDE.Port)
-		time.Sleep(100 * time.Millisecond) // Give server time to start
+	// If IDE is disabled in config, enable it temporarily for interactive mode
+	ideConfig := ide.Config{
+		Enable:    true, // Always enable for interactive mode
+		Transport: cfg.IDE.Transport,
+		DiffTool:  cfg.IDE.DiffTool,
+		Port:      cfg.IDE.Port,
 	}
+
+	// Use default port if not configured
+	if ideConfig.Port == 0 {
+		ideConfig.Port = 8123
+	}
+
+	ideServer = ide.NewServer(ideConfig)
+
+	// Start IDE server in background
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		if err := ideServer.Start(ctx); err != nil {
+			// Don't exit on IDE server error, just log it
+			fmt.Printf("IDE server warning: %v\n", err)
+		}
+	}()
+
+	// Give server time to start and print connection info
+	time.Sleep(200 * time.Millisecond)
 
 	// Create the interactive model with runner, config, and IDE server
 	model := ui.NewInteractiveModel(r, cfg, ideServer)
