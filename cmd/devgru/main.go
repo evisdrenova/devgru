@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -49,13 +48,8 @@ func runInteractiveMode() {
 		Port:      workspacePort,
 	}
 
-	if ideConfig.Port == 0 {
-		ideConfig.Port = 8123
-	}
-
 	ideServer = ide.NewServer(ideConfig)
 
-	// Start IDE server in background
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -65,9 +59,6 @@ func runInteractiveMode() {
 			fmt.Printf("IDE server warning: %v\n", err)
 		}
 	}()
-
-	// Give server time to start and print connection info
-	time.Sleep(200 * time.Millisecond)
 
 	model := ui.NewInteractiveModel(r, cfg, ideServer)
 
@@ -89,11 +80,10 @@ func runInteractiveMode() {
 func generateWorkspacePort() int {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return 8123 // fallback to default
+		return 8123
 	}
 
 	hash := simpleHash(cwd)
-
 	port := 8123 + (hash % 77)
 
 	return port
@@ -101,8 +91,9 @@ func generateWorkspacePort() int {
 
 func simpleHash(s string) int {
 	hash := 0
+	// same logic as extension when it calcs a port
 	for _, c := range s {
-		hash = hash*31 + int(c)
+		hash = (hash*31 + int(c)) % 2147483647
 	}
 	if hash < 0 {
 		hash = -hash

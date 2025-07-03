@@ -115,15 +115,16 @@ class DevGruClient implements vscode.Disposable {
 
     const workspacePath = workspaceFolders[0].uri.fsPath;
     const hash = this.simpleHash(workspacePath);
+    const port = 8123 + (hash % 77);
 
-    // Same port range as Go: 8123-8200
-    return 8123 + (hash % 77);
+    return port;
   }
 
   private simpleHash(s: string): number {
     let hash = 0;
     for (let i = 0; i < s.length; i++) {
-      hash = hash * 31 + s.charCodeAt(i);
+      // Apply modulo during calculation to prevent overflow
+      hash = (hash * 31 + s.charCodeAt(i)) % 2147483647; // Use a large prime
     }
     return Math.abs(hash);
   }
