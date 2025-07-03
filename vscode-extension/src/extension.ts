@@ -98,24 +98,43 @@ class DevGruClient implements vscode.Disposable {
   private ws: WebSocket | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private lastSelectionTime = 0;
+  private currentPort: number = 8123;
   private readonly HANDSHAKE_MESSAGE = "###DEVGRU_VSCODE_HANDSHAKE###";
   private readonly DIFF_START_MARKER = "<<<DEVGRU_DIFF_START>>>";
   private readonly DIFF_END_MARKER = "<<<DEVGRU_DIFF_END>>>";
 
   constructor() {
-    // Try to connect initially
     this.tryConnect();
   }
 
+  private calculateWorkspacePort(): number {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+      return 8123; // default port
+    }
+
+    const workspacePath = workspaceFolders[0].uri.fsPath;
+    const hash = this.simpleHash(workspacePath);
+
+    // Same port range as Go: 8123-8200
+    return 8123 + (hash % 77);
+  }
+
+  private simpleHash(s: string): number {
+    let hash = 0;
+    for (let i = 0; i < s.length; i++) {
+      hash = hash * 31 + s.charCodeAt(i);
+    }
+    return Math.abs(hash);
+  }
+
   async tryConnect(): Promise<void> {
-    const port = vscode.workspace
-      .getConfiguration("devgru")
-      .get("serverPort", 8123);
+    this.currentPort = this.calculateWorkspacePort();
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
 
     try {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const ws = new WebSocket(`ws://127.0.0.1:${this.currentPort}/ws`);
       this.ws = ws;
 
       ws.on("open", () => {

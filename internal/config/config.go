@@ -108,7 +108,6 @@ func Load(configPath string) (*Config, error) {
 
 // LoadDefault loads configuration from default locations
 func LoadDefault() (*Config, error) {
-	// Try these locations in order
 	locations := []string{
 		"devgru.yaml",
 		"devgru.yml",
