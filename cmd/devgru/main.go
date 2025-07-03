@@ -15,9 +15,16 @@ import (
 )
 
 func main() {
+	// If no arguments, start interactive mode
+	if len(os.Args) == 1 {
+		runInteractiveMode()
+		return
+	}
+
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <command> [args...]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [command] [args...]\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nCommands:\n")
+		fmt.Fprintf(os.Stderr, "  (no args)        Start interactive mode\n")
 		fmt.Fprintf(os.Stderr, "  run <prompt>     Run a prompt through all workers\n")
 		fmt.Fprintf(os.Stderr, "  run --raw <prompt>  Run with raw JSON output\n")
 		fmt.Fprintf(os.Stderr, "  ide <subcommand> IDE integration commands\n")
@@ -36,6 +43,34 @@ func main() {
 		versionCommand()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
+		os.Exit(1)
+	}
+}
+
+// runInteractiveMode starts the interactive TUI mode
+func runInteractiveMode() {
+	// Load configuration
+	cfg, err := config.LoadDefault()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Make sure you have a devgru.yaml file in the current directory or ~/.devgru/\n")
+		os.Exit(1)
+	}
+
+	// Create runner
+	r, err := runner.NewRunner(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create runner: %v\n", err)
+		os.Exit(1)
+	}
+	defer r.Close()
+
+	// Create the interactive model with runner and config
+	model := ui.NewInteractiveModel(r, cfg)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running interactive mode: %v\n", err)
 		os.Exit(1)
 	}
 }
