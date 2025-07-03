@@ -175,9 +175,6 @@ func (s *Server) processMessage(msg Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Add debug logging to see all incoming messages
-	log.Printf("Received message type: %s, data: %+v", msg.Type, msg.Data)
-
 	switch msg.Type {
 	case "selection":
 		var selection SelectionMessage
@@ -185,7 +182,6 @@ func (s *Server) processMessage(msg Message) {
 			json.Unmarshal(data, &selection)
 			s.context.Selection = &selection
 			s.context.ActiveFile = selection.File
-			log.Printf("Selection updated - file: %s, text: %s", selection.File, selection.Text[:min(50, len(selection.Text))])
 		}
 
 	case "diagnostic":
@@ -196,28 +192,19 @@ func (s *Server) processMessage(msg Message) {
 			if len(s.context.Diagnostics) > 10 {
 				s.context.Diagnostics = s.context.Diagnostics[1:]
 			}
-			log.Printf("Diagnostic added for file: %s", diagnostic.File)
 		}
 
 	case "fileChange":
-		log.Printf("Processing fileChange message with data: %+v", msg.Data)
 		if file, ok := msg.Data["file"].(string); ok {
 			s.context.ActiveFile = file
-			log.Printf("✅ Active file changed to: %s", file)
-		} else {
-			log.Printf("❌ Failed to extract file from fileChange message")
 		}
-		// Clear selection when file changes (unless it's part of the same message)
 		if s.context.Selection != nil && s.context.Selection.File != s.context.ActiveFile {
-			log.Printf("Clearing selection for previous file: %s", s.context.Selection.File)
 			s.context.Selection = nil
 		}
-
 	case "workspace":
-		log.Printf("Processing workspace message with data: %+v", msg.Data)
+
 		if root, ok := msg.Data["root"].(string); ok {
 			s.context.WorkspaceRoot = root
-			log.Printf("Workspace root set to: %s", root)
 		}
 		if files, ok := msg.Data["open_files"].([]interface{}); ok {
 			var openFiles []string
@@ -227,25 +214,11 @@ func (s *Server) processMessage(msg Message) {
 				}
 			}
 			s.context.OpenFiles = openFiles
-			log.Printf("Open files updated: %v", openFiles)
 		}
 
 	default:
 		log.Printf("❓ Unknown message type: %s", msg.Type)
 	}
-
-	// Log current context state after processing
-	log.Printf("Current context - ActiveFile: %s, Selection: %v",
-		s.context.ActiveFile,
-		s.context.Selection != nil)
-}
-
-// Helper function for min
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // GetContext returns the current IDE context

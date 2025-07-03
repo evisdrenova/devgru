@@ -101,8 +101,12 @@ func runInteractiveMode() {
 	// Create the interactive model with runner, config, and IDE server
 	model := ui.NewInteractiveModel(r, cfg, ideServer)
 
-	// Create bubbletea program
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	// Create bubbletea program with proper options
+	p := tea.NewProgram(
+		model,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running interactive mode: %v\n", err)
