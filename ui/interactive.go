@@ -13,10 +13,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/evisdrenova/devgru/internal/config"
+	"github.com/evisdrenova/devgru/internal/ide"
 	"github.com/evisdrenova/devgru/internal/runner"
 )
 
-// AppState represents the current state of the appinteraclication
+// AppState represents the current state of the application
 type AppState int
 
 const (
@@ -33,8 +34,9 @@ type InteractiveModel struct {
 	height int
 
 	// Dependencies
-	runner *runner.Runner
-	config *config.Config
+	runner    *runner.Runner
+	config    *config.Config
+	ideServer *ide.Server
 
 	// Input screen
 	inputModel *InputModel
@@ -49,6 +51,9 @@ type InteractiveModel struct {
 	// Error state
 	errorMessage string
 
+	// IDE context from VS Code
+	ideContext *ide.IDEContext
+
 	// Global key bindings
 	keys GlobalKeyMap
 }
@@ -61,6 +66,11 @@ type ProcessingMsg struct {
 type RunCompleteMsg struct {
 	result *runner.RunResult
 	err    error
+}
+
+// IDE context update message
+type IDEContextUpdateMsg struct {
+	context *ide.IDEContext
 }
 
 // GlobalKeyMap defines global key bindings
@@ -125,7 +135,7 @@ func DefaultInputKeyMap() InputKeyMap {
 }
 
 // NewInteractiveModel creates a new interactive application model
-func NewInteractiveModel(r *runner.Runner, cfg *config.Config) *InteractiveModel {
+func NewInteractiveModel(r *runner.Runner, cfg *config.Config, ideServer *ide.Server) *InteractiveModel {
 	// Create input model
 	ti := textinput.New()
 	ti.Placeholder = `Try "write a test for <filepath>"`
@@ -148,15 +158,21 @@ func NewInteractiveModel(r *runner.Runner, cfg *config.Config) *InteractiveModel
 		state:      StateInput,
 		runner:     r,
 		config:     cfg,
+		ideServer:  ideServer,
 		inputModel: inputModel,
 		spinner:    s,
+		ideContext: &ide.IDEContext{},
 		keys:       DefaultGlobalKeyMap(),
 	}
 }
 
 // Init implements bubbletea.Model
 func (m *InteractiveModel) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.spinner.Tick)
+	return tea.Batch(
+		textinput.Blink,
+		m.spinner.Tick,
+		m.pollIDEContext(), // Start polling IDE context
+	)
 }
 
 // Update implements bubbletea.Model
@@ -190,6 +206,12 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = StateResults
 		}
 		return m, nil
+
+	case IDEContextUpdateMsg:
+		if msg.context != nil {
+			m.ideContext = msg.context
+		}
+		return m, m.pollIDEContext() // Continue polling
 
 	case tea.KeyMsg:
 		// Global key handling
@@ -404,6 +426,55 @@ func (m *InteractiveModel) renderInput() string {
 
 	shortcuts := shortcutStyle.Render("? for shortcuts")
 
+	// File info section - shows current file and selection from VS Code
+	var fileSection string
+	if m.ideServer != nil && m.ideServer.IsConnected() && m.ideContext.ActiveFile != "" {
+		fileStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Background(lipgloss.Color("235")).
+			Padding(0, 2).
+			Margin(1, 4).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("39"))
+
+		var fileInfo strings.Builder
+		fileInfo.WriteString(fmt.Sprintf("📁 %s", m.ideContext.ActiveFile))
+
+		// Show selection info if available
+		if m.ideContext.Selection != nil {
+			sel := m.ideContext.Selection
+			if sel.StartLine == sel.EndLine {
+				fileInfo.WriteString(fmt.Sprintf("\n🎯 Selection: L%d", sel.StartLine))
+			} else {
+				fileInfo.WriteString(fmt.Sprintf("\n🎯 Selection: L%d-L%d", sel.StartLine, sel.EndLine))
+			}
+
+			// Show preview of selection (first 50 chars)
+			preview := strings.ReplaceAll(sel.Text, "\n", " ")
+			if len(preview) > 50 {
+				preview = preview[:50] + "..."
+			}
+			fileInfo.WriteString(fmt.Sprintf("\n💡 \"%s\"", preview))
+		}
+
+		// Show VS Code connection status
+		fileInfo.WriteString("\n🔌 VS Code Connected")
+
+		fileSection = fileStyle.Render(fileInfo.String())
+	} else if m.ideServer != nil && m.config.IDE.Enable {
+		// Show connection status when IDE is enabled but not connected
+		statusStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Background(lipgloss.Color("237")).
+			Padding(0, 2).
+			Margin(1, 4).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("214"))
+
+		statusInfo := fmt.Sprintf("🔌 VS Code: Waiting for connection on port %d", m.config.IDE.Port)
+		fileSection = statusStyle.Render(statusInfo)
+	}
+
 	// Footer
 	footerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
@@ -418,6 +489,10 @@ func (m *InteractiveModel) renderInput() string {
 
 	if historySection != "" {
 		sections = append(sections, historySection)
+	}
+
+	if fileSection != "" {
+		sections = append(sections, fileSection)
 	}
 
 	sections = append(sections, shortcuts)
@@ -500,6 +575,17 @@ func (m *InteractiveModel) renderProcessing() string {
 		PaddingTop(paddingTop).
 		Width(m.width).
 		Render(content)
+}
+
+// pollIDEContext polls the IDE server for context updates
+func (m *InteractiveModel) pollIDEContext() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		if m.ideServer != nil {
+			context := m.ideServer.GetContext()
+			return IDEContextUpdateMsg{context: context}
+		}
+		return IDEContextUpdateMsg{context: nil}
+	})
 }
 
 // renderError renders the error screen

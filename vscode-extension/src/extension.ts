@@ -71,6 +71,12 @@ export function activate(context: vscode.ExtensionContext) {
     devgruClient.handleDiagnosticsChange(e);
   });
 
+  const activeEditorListener = vscode.window.onDidChangeActiveTextEditor(
+    (editor) => {
+      devgruClient.handleActiveEditorChange(editor);
+    }
+  );
+
   // Watch for DevGru handshake in terminal output
   // Note: onDidWriteTerminalData is not available in all VS Code versions
   // We'll use a different approach to detect handshake
@@ -99,6 +105,7 @@ export function activate(context: vscode.ExtensionContext) {
     selectionListener,
     diagnosticListener,
     devgruClient,
+    activeEditorListener,
   ];
 
   if (terminalListener) {
@@ -202,6 +209,22 @@ class DevGruClient implements vscode.Disposable {
         open_files: openFiles,
       },
     });
+
+    // Send current active file
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor && !activeEditor.document.isUntitled) {
+      const relativePath = vscode.workspace.asRelativePath(
+        activeEditor.document.uri
+      );
+      this.sendMessage({
+        type: "fileChange",
+        timestamp: new Date().toISOString(),
+        data: {
+          file: relativePath,
+          language: activeEditor.document.languageId,
+        },
+      });
+    }
   }
 
   handleSelectionChange(event: vscode.TextEditorSelectionChangeEvent): void {
@@ -424,6 +447,35 @@ class DevGruClient implements vscode.Disposable {
     }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
+    }
+  }
+
+  handleActiveEditorChange(editor: vscode.TextEditor | undefined): void {
+    if (!editor || editor.document.isUntitled) {
+      return;
+    }
+
+    const relativePath = vscode.workspace.asRelativePath(editor.document.uri);
+    const language = editor.document.languageId;
+
+    // Send file change notification
+    this.sendMessage({
+      type: "fileChange",
+      timestamp: new Date().toISOString(),
+      data: {
+        file: relativePath,
+        language: language,
+      },
+    });
+
+    // Also send current selection if any
+    const selection = editor.selection;
+    if (!selection.isEmpty) {
+      this.handleSelectionChange({
+        textEditor: editor,
+        selections: [selection],
+        kind: vscode.TextEditorSelectionChangeKind.Command,
+      });
     }
   }
 }

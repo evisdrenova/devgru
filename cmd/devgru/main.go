@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/evisdrenova/devgru/internal/config"
+	"github.com/evisdrenova/devgru/internal/ide"
 	"github.com/evisdrenova/devgru/internal/runner"
 	"github.com/evisdrenova/devgru/ui"
 )
@@ -65,8 +66,36 @@ func runInteractiveMode() {
 	}
 	defer r.Close()
 
-	// Create the interactive model with runner and config
-	model := ui.NewInteractiveModel(r, cfg)
+	// Create IDE server if enabled
+	var ideServer *ide.Server
+	if cfg.IDE.Enable {
+		ideConfig := ide.Config{
+			Enable:    cfg.IDE.Enable,
+			Transport: cfg.IDE.Transport,
+			DiffTool:  cfg.IDE.DiffTool,
+			Port:      cfg.IDE.Port,
+		}
+		ideServer = ide.NewServer(ideConfig)
+
+		// Start IDE server in background
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go func() {
+			if err := ideServer.Start(ctx); err != nil {
+				// Don't exit on IDE server error, just log it
+				fmt.Printf("IDE server warning: %v\n", err)
+			}
+		}()
+
+		fmt.Printf("🔌 VS Code integration server started on port %d\n", cfg.IDE.Port)
+		time.Sleep(100 * time.Millisecond) // Give server time to start
+	}
+
+	// Create the interactive model with runner, config, and IDE server
+	model := ui.NewInteractiveModel(r, cfg, ideServer)
+
+	// Create bubbletea program
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
