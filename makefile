@@ -111,26 +111,12 @@ setup:
 	go mod download
 	@echo "✅ Development environment ready"
 
-# Quick rebuild just the binary (for faster iteration)
+
 quick:
 	@echo "⚡ Quick rebuild (binary only)..."
 	go build -o bin/devgru ./cmd/devgru
 	@echo "✅ Quick build complete"
 
-
-dev-server:
-	@echo "👂 Watching all Go files — rebuild & restart DevGru on change"
-	@find . -type f -name '*.go' \
-	  | entr -r sh -c '\
-	      echo "🔄 Change detected — rebuilding…"; \
-	      go build -o bin/devgru ./cmd/devgru && \
-	      echo "✅ Built bin/devgru"; \
-	      echo "🔂 Killing any old DevGru processes…"; \
-	      pkill -f "./bin/devgru ide connect" || true; \
-	      pkill -f "./bin/devgru$$" || true; \
-	      echo "🚀 Starting IDE server…"; \
-	      ./bin/devgru ide connect & \
-	      sleep 1; \
-	      echo "💬 Starting interactive TUI…"; \
-	      ./bin/devgru; \
-	    '
+dev-start:
+	go build -o bin/devgru ./cmd/devgru && \
+	./bin/devgru \

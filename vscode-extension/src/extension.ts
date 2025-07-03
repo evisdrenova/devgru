@@ -140,7 +140,6 @@ class DevGruClient implements vscode.Disposable {
 
       ws.on("open", () => {
         console.log("Connected to DevGru");
-        vscode.window.showInformationMessage("DevGru: Connected to server");
 
         // Send workspace info first
         this.sendWorkspaceInfo();

@@ -188,14 +188,21 @@ func NewInteractiveModel(r *runner.Runner, cfg *config.Config, ideServer *ide.Se
 	ta := textarea.New()
 	ta.Placeholder = `Try "write a test for <filepath>"`
 	ta.Focus()
+	ta.ShowLineNumbers = false
+	ta.Prompt = "> "
 	ta.CharLimit = 1000
-	ta.SetHeight(3)
+	ta.SetHeight(1)
+
+	ta.BlurredStyle.Base = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 
 	// initial welcome message
 	chatHistory := []ChatEntry{
 		{
-			Type:      "system",
-			Content:   "🤖 Welcome to DevGru Interactive Chat!",
+			Type:      ChatEntrySystem,
+			Content:   "Welcome to DevGru Interactive Chat!",
 			Timestamp: time.Now(),
 		},
 	}
@@ -217,18 +224,24 @@ func (m *InteractiveModel) View() string {
 		return "Loading..."
 	}
 
-	// Status bar
+	logoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("208")).
+		Align(lipgloss.Center).
+		Width(m.width).
+		Padding(1, 0)
+
+	logo := logoStyle.Render(devgruLogo)
+
 	statusStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
-		Background(lipgloss.Color("235")).
 		Padding(0, 2).
 		Width(m.width)
 
 	var statusLeft string
 	if m.ideServer != nil && m.ideServer.IsConnected() {
-		statusLeft = fmt.Sprintf("✅ VS Code Connected • Workers: %d", len(m.config.Workers))
+		statusLeft = fmt.Sprintf("Connected • Workers: %d", len(m.config.Workers))
 	} else {
-		statusLeft = fmt.Sprintf("🔌 VS Code Ready • Workers: %d", len(m.config.Workers))
+		statusLeft = "Not Connected"
 	}
 
 	var statusRight string
@@ -236,14 +249,16 @@ func (m *InteractiveModel) View() string {
 		statusRight = fmt.Sprintf("📁 %s", m.ideContext.ActiveFile)
 	}
 
-	// Create status line
-	statusLine := statusLeft
-	if statusRight != "" {
-		padding := m.width - lipgloss.Width(statusLeft) - lipgloss.Width(statusRight) - 4
-		if padding > 0 {
-			statusLine += strings.Repeat(" ", padding) + statusRight
-		}
+	leftW := lipgloss.Width(statusLeft)
+	rightW := lipgloss.Width(statusRight)
+	filler := m.width - 4 - leftW - rightW
+	if filler < 0 {
+		filler = 0
 	}
+
+	statusLine := statusLeft +
+		strings.Repeat(" ", filler) +
+		statusRight
 
 	status := statusStyle.Render(statusLine)
 
@@ -254,39 +269,31 @@ func (m *InteractiveModel) View() string {
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("63")).
-		Padding(0, 1).
-		Width(m.width-4).
-		Margin(0, 2)
-
-	var inputPrompt string
-	if m.isProcessing {
-		inputPrompt = "🔄 Processing..."
-	} else {
-		inputPrompt = "Enter your request:"
-	}
+		Width(m.width - 6).
+		Padding(1)
 
 	inputContent := lipgloss.JoinVertical(
 		lipgloss.Left,
-		inputPrompt,
 		m.textArea.View(),
 	)
 
 	inputSection := inputStyle.Render(inputContent)
 
-	// Help line
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		Padding(0, 2)
 
 	help := helpStyle.Render("enter: submit • ctrl+l: clear • ↑/↓: scroll • ctrl+c: quit")
 
-	// Combine all sections
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
+		logo,
 		status,
+		"",
 		chatView,
 		inputSection,
 		help,
+		"",
 	)
 }
 
@@ -313,7 +320,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PlanningStepMsg:
 		// Append planning step to chat
 		m.addChatEntry(ChatEntry{
-			Type:      "planning",
+			Type:      ChatEntryPlanning,
 			Content:   fmt.Sprintf("%s %s", m.getStatusIcon(msg.Status), msg.Step),
 			Timestamp: time.Now(),
 			Data:      msg,
@@ -323,7 +330,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PlanningCompleteMsg:
 		if msg.err != nil {
 			m.addChatEntry(ChatEntry{
-				Type:      "error",
+				Type:      ChatEntryError,
 				Content:   fmt.Sprintf("❌ Planning failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
 			})
@@ -332,7 +339,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Add the final plan to chat
 			planContent := m.formatPlanResult(msg.plan)
 			m.addChatEntry(ChatEntry{
-				Type:      "planning",
+				Type:      ChatEntryPlanning,
 				Content:   planContent,
 				Timestamp: time.Now(),
 				Data:      msg.plan,
@@ -347,7 +354,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isProcessing = false
 		if msg.err != nil {
 			m.addChatEntry(ChatEntry{
-				Type:      "error",
+				Type:      ChatEntryError,
 				Content:   fmt.Sprintf("❌ Execution failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
 			})
@@ -355,7 +362,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Add execution result to chat
 			resultContent := m.formatRunResult(msg.result)
 			m.addChatEntry(ChatEntry{
-				Type:      "result",
+				Type:      ChatEntryResult,
 				Content:   resultContent,
 				Timestamp: time.Now(),
 				Data:      msg.result,
@@ -381,7 +388,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if input != "" {
 					// Add user message to chat
 					m.addChatEntry(ChatEntry{
-						Type:      "user",
+						Type:      ChatEntryUser,
 						Content:   input,
 						Timestamp: time.Now(),
 					})
@@ -400,7 +407,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Clear):
 			m.chatHistory = []ChatEntry{
 				{
-					Type:      "system",
+					Type:      ChatEntrySystem,
 					Content:   "Chat cleared.",
 					Timestamp: time.Now(),
 				},
@@ -453,29 +460,29 @@ func (m *InteractiveModel) formatChatEntry(entry ChatEntry) string {
 	timestamp := entry.Timestamp.Format("15:04:05")
 
 	switch entry.Type {
-	case "user":
+	case ChatEntryUser:
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39")).
 			Bold(true)
 		return style.Render(fmt.Sprintf("[%s] You: %s", timestamp, entry.Content))
 
-	case "system":
+	case ChatEntrySystem:
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			Italic(true)
 		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
 
-	case "planning":
+	case ChatEntryPlanning:
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("214"))
 		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
 
-	case "result":
+	case ChatEntryResult:
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("46"))
 		return style.Render(fmt.Sprintf("[%s] ✅ %s", timestamp, entry.Content))
 
-	case "error":
+	case ChatEntryError:
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196"))
 		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
