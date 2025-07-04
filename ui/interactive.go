@@ -242,11 +242,14 @@ func (m *InteractiveModel) View() string {
 	logoHeight := lipgloss.Height(logo)
 	m.viewport.Height = m.height - inputHeight - logoHeight
 
+	statusLine := m.buildStatusLine()
+
 	// Create combined view with logo at top
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		logo,
 		m.viewport.View(),
+		statusLine,
 		inputArea,
 	)
 
@@ -258,12 +261,6 @@ func (m *InteractiveModel) buildFlowingContent() string {
 	}
 
 	var content []string
-
-	// Add status line at the top when there are blocks
-	statusLine := m.buildStatusLine()
-	if statusLine != "" {
-		content = append(content, statusLine, "")
-	}
 
 	// Render all blocks in flowing order
 	for i, block := range m.blocks {
