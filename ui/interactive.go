@@ -228,41 +228,29 @@ func (m *InteractiveModel) View() string {
 	content := m.buildFlowingContent()
 	m.viewport.SetContent(content)
 
+	statusLine := m.buildStatusLine()
 	inputArea := m.buildInputArea()
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.viewport.View(),
+		statusLine,
+		inputArea,
+	)
+}
+
+func (m *InteractiveModel) buildFlowingContent() string {
+	var content []string
 
 	logoStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("208")).
 		Align(lipgloss.Center).
 		Width(m.width).
-		Padding(1, 0)
+		Padding(2, 0)
 
 	logo := logoStyle.Render(devgruLogo)
+	content = append(content, logo, "")
 
-	// Adjust viewport height to accommodate logo
-	logoHeight := lipgloss.Height(logo)
-	m.viewport.Height = m.height - inputHeight - logoHeight
-
-	statusLine := m.buildStatusLine()
-
-	// Create combined view with logo at top
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		logo,
-		m.viewport.View(),
-		statusLine,
-		inputArea,
-	)
-
-}
-
-func (m *InteractiveModel) buildFlowingContent() string {
-	if len(m.blocks) == 0 {
-		return ""
-	}
-
-	var content []string
-
-	// Render all blocks in flowing order
 	for i, block := range m.blocks {
 		blockContent := m.renderBlock(block, i)
 		content = append(content, blockContent)
