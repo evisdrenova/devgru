@@ -103,46 +103,42 @@ type IDEContextUpdateMsg struct {
 	context *ide.IDEContext
 }
 type Block struct {
-	ID        string        // Unique identifier for the block
-	Type      ChatEntryType // Type of block
-	Content   string        // Main content
-	Status    StepStatus    // Status for processing blocks
-	Timestamp time.Time     // When the block was created
-	Data      interface{}   // Additional data
-	Children  []Block       // Child blocks (for nested content)
+	ID        string
+	Type      ChatEntryType
+	Content   string
+	Status    StepStatus
+	Timestamp time.Time
+	Data      interface{}
+	ParentID  string
+	Children  []Block
+	IsLast    bool
 }
 
-// ChatEntry represents a single entry in the chat history
 type ChatEntry struct {
 	Type      ChatEntryType
 	Content   string
 	Timestamp time.Time
-	Data      interface{} // Store additional data like PlanResult, RunResult, etc.
+	Data      interface{}
 }
 
-// InteractiveModel represents the main interactive application model
 type InteractiveModel struct {
 	width  int
 	height int
 
-	// Dependencies
 	runner    *runner.Runner
 	config    *config.Config
 	ideServer *ide.Server
 
-	// Chat history and viewport
-	blocks   []Block
-	viewport viewport.Model
-	textArea textarea.Model
+	blocks        []Block
+	viewport      viewport.Model
+	textArea      textarea.Model
+	currentUserID string
 
-	// Current state for tracking ongoing operations
 	currentPrompt string
 	isProcessing  bool
 
-	// IDE context from VS Code
 	ideContext *ide.IDEContext
 
-	// Key bindings
 	keys GlobalKeyMap
 }
 
@@ -228,13 +224,11 @@ func (m *InteractiveModel) View() string {
 	content := m.buildFlowingContent()
 	m.viewport.SetContent(content)
 
-	statusLine := m.buildStatusLine()
 	inputArea := m.buildInputArea()
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		m.viewport.View(),
-		statusLine,
 		inputArea,
 	)
 }
@@ -255,9 +249,13 @@ func (m *InteractiveModel) buildFlowingContent() string {
 		blockContent := m.renderBlock(block, i)
 		content = append(content, blockContent)
 
-		// Add spacing between blocks
+		// Don't add spacing between child blocks to keep tree connected
 		if i < len(m.blocks)-1 {
-			content = append(content, "")
+			nextBlock := m.blocks[i+1]
+			// Only add spacing if next block is not a child or if current block is not a parent
+			if nextBlock.ParentID == "" && block.ParentID == "" {
+				content = append(content, "")
+			}
 		}
 	}
 
@@ -299,7 +297,9 @@ func (m *InteractiveModel) buildStatusLine() string {
 }
 
 func (m *InteractiveModel) buildInputArea() string {
-	// Create input with border
+
+	statusLine := m.buildStatusLine()
+
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("63")).
@@ -309,18 +309,27 @@ func (m *InteractiveModel) buildInputArea() string {
 	inputContent := m.textArea.View()
 	inputSection := inputStyle.Render(inputContent)
 
-	// Add help text
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		Padding(0, 1)
 
 	help := helpStyle.Render("enter: submit • ctrl+l: clear • ↑/↓: scroll • ctrl+c: quit")
 
-	return lipgloss.JoinVertical(lipgloss.Left, inputSection, help)
+	return lipgloss.JoinVertical(lipgloss.Left, statusLine, inputSection, help)
 }
 
 func (m *InteractiveModel) renderBlock(block Block, index int) string {
 	timestamp := block.Timestamp.Format("15:04:05")
+
+	// Determine tree prefix based on parent relationship
+	var treePrefix string
+	if block.ParentID != "" {
+		if block.IsLast {
+			treePrefix = "└─ "
+		} else {
+			treePrefix = "├─ "
+		}
+	}
 
 	switch block.Type {
 	case ChatEntryUser:
@@ -334,34 +343,57 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		return style.Render(content)
 
 	case ChatEntryPlanning:
-		// Planning step block
-		style := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214")).
-			Padding(0, 1)
+		// Planning step block with tree structure
+		var style lipgloss.Style
+		if block.Status == StatusComplete {
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("46")). // Green for completed
+				Padding(0, 1)
+		} else if block.Status == StatusError {
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("196")). // Red for error
+				Padding(0, 1)
+		} else {
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")). // Orange for working
+				Padding(0, 1)
+		}
 
 		icon := m.getStatusIcon(block.Status)
-		return style.Render(fmt.Sprintf("● %s %s", icon, block.Content))
+		content := fmt.Sprintf("%s%s %s", treePrefix, icon, block.Content)
+		return style.Render(content)
 
 	case ChatEntryResult:
-		// Result block with border
+		// Result block with border and tree structure if it has a parent
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("46")).
 			Padding(1).
 			Width(m.width - 4)
 
-		content := fmt.Sprintf("✅ %s", block.Content)
+		var content string
+		if block.ParentID != "" {
+			content = fmt.Sprintf("%s✅ %s", treePrefix, block.Content)
+		} else {
+			content = fmt.Sprintf("✅ %s", block.Content)
+		}
 		return style.Render(content)
 
 	case ChatEntryError:
-		// Error block with distinctive styling
+		// Error block with distinctive styling and tree structure if it has a parent
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("196")).
 			Padding(1).
 			Width(m.width - 4)
 
-		return style.Render(block.Content)
+		var content string
+		if block.ParentID != "" {
+			content = fmt.Sprintf("%s%s", treePrefix, block.Content)
+		} else {
+			content = block.Content
+		}
+		return style.Render(content)
 
 	case ChatEntrySystem:
 		// System message
@@ -377,7 +409,8 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		style := lipgloss.NewStyle().
 			Padding(0, 1)
 
-		return style.Render(fmt.Sprintf("[%s] %s", timestamp, block.Content))
+		content := fmt.Sprintf("%s[%s] %s", treePrefix, timestamp, block.Content)
+		return style.Render(content)
 	}
 }
 
@@ -393,36 +426,41 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case PlanningStepMsg:
-		// Add planning step as a new block
-		m.addBlock(Block{
-			ID:        fmt.Sprintf("step_%d", len(m.blocks)),
+		// Add planning step as a child of the current user prompt
+		stepID := fmt.Sprintf("step_%d_%d", len(m.blocks), time.Now().UnixNano())
+		m.addBlockAsChild(Block{
+			ID:        stepID,
 			Type:      ChatEntryPlanning,
 			Content:   msg.Step,
 			Status:    msg.Status,
 			Timestamp: time.Now(),
 			Data:      msg,
+			ParentID:  m.currentUserID,
 		})
 		return m, nil
 
 	case PlanningCompleteMsg:
 		if msg.err != nil {
-			m.addBlock(Block{
+			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("error_%d", len(m.blocks)),
 				Type:      ChatEntryError,
 				Content:   fmt.Sprintf("❌ Planning failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
+				ParentID:  m.currentUserID,
+				IsLast:    true,
 			})
 			m.isProcessing = false
 		} else {
-			// Add the final plan block
+			// Add the final plan block as child
 			planContent := m.formatPlanResult(msg.plan)
-			m.addBlock(Block{
+			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("plan_%d", len(m.blocks)),
 				Type:      ChatEntryPlanning,
 				Content:   planContent,
 				Status:    StatusComplete,
 				Timestamp: time.Now(),
 				Data:      msg.plan,
+				ParentID:  m.currentUserID,
 			})
 
 			// Auto-execute the plan
@@ -433,21 +471,25 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RunCompleteMsg:
 		m.isProcessing = false
 		if msg.err != nil {
-			m.addBlock(Block{
+			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("error_%d", len(m.blocks)),
 				Type:      ChatEntryError,
 				Content:   fmt.Sprintf("❌ Execution failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
+				ParentID:  m.currentUserID,
+				IsLast:    true,
 			})
 		} else {
-			// Add execution result block
+			// Add execution result block as child
 			resultContent := m.formatRunResult(msg.result)
-			m.addBlock(Block{
+			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("result_%d", len(m.blocks)),
 				Type:      ChatEntryResult,
 				Content:   resultContent,
 				Timestamp: time.Now(),
 				Data:      msg.result,
+				ParentID:  m.currentUserID,
+				IsLast:    true,
 			})
 		}
 		return m, nil
@@ -468,10 +510,12 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.isProcessing {
 				input := strings.TrimSpace(m.textArea.Value())
 				if input != "" {
+					// Create a new user block
+					userID := fmt.Sprintf("user_%d", len(m.blocks))
+					m.currentUserID = userID
 
-					// Add user input as a block
 					m.addBlock(Block{
-						ID:        fmt.Sprintf("user_%d", len(m.blocks)),
+						ID:        userID,
 						Type:      ChatEntryUser,
 						Content:   input,
 						Timestamp: time.Now(),
@@ -489,8 +533,9 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Clear):
-			// Clear all blocks and show logo again
+			// Clear all blocks
 			m.blocks = []Block{}
+			m.currentUserID = ""
 			m.isProcessing = false
 			return m, nil
 
@@ -521,6 +566,25 @@ func (m *InteractiveModel) addBlock(block Block) {
 	m.blocks = append(m.blocks, block)
 	// Auto-scroll to bottom to show new content
 	m.viewport.GotoBottom()
+}
+
+func (m *InteractiveModel) addBlockAsChild(block Block) {
+	// Mark previous child as not last if this is a new child
+	m.updateLastChildStatus(block.ParentID)
+
+	m.blocks = append(m.blocks, block)
+	// Auto-scroll to bottom to show new content
+	m.viewport.GotoBottom()
+}
+
+func (m *InteractiveModel) updateLastChildStatus(parentID string) {
+	// Find the last child of this parent and mark it as not last
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if m.blocks[i].ParentID == parentID {
+			m.blocks[i].IsLast = false
+			break
+		}
+	}
 }
 
 func (m *InteractiveModel) getStatusIcon(status StepStatus) string {
