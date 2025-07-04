@@ -230,11 +230,18 @@ func (m *InteractiveModel) View() string {
 		Width(m.width).
 		Padding(1, 0)
 
-	logo := logoStyle.Render(devgruLogo)
+	dglogo := `
+	 ██████╗  ███████╗ ██╗   ██╗  ██████╗  ██████╗  ██╗   ██╗
+	 ██╔══██╗ ██╔════╝ ██║   ██║ ██╔════╝  ██╔══██╗ ██║   ██║
+	 ██║  ██║ █████╗   ██║   ██║ ██║  ███╗ ██████╔╝ ██║   ██║
+	 ██║  ██║ ██╔══╝   ╚██╗ ██╔╝ ██║   ██║ ██╔══██╗ ██║   ██║
+	 ██████╔╝ ███████╗  ╚████╔╝  ╚██████╔╝ ██║  ██║ ╚██████╔╝
+	 ╚═════╝  ╚══════╝   ╚═══╝    ╚═════╝  ╚═╝  ╚═╝  ╚═════╝`
+
+	logo := logoStyle.Render(dglogo)
 
 	statusStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
-		Padding(0, 2).
 		Width(m.width)
 
 	var statusLeft string
@@ -263,7 +270,7 @@ func (m *InteractiveModel) View() string {
 	status := statusStyle.Render(statusLine)
 
 	// Chat viewport
-	chatView := m.viewport.View()
+	// chatView := m.viewport.View()
 
 	// Input area
 	inputStyle := lipgloss.NewStyle().
@@ -290,7 +297,7 @@ func (m *InteractiveModel) View() string {
 		logo,
 		status,
 		"",
-		chatView,
+		// chatView,
 		inputSection,
 		help,
 		"",
