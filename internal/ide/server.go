@@ -95,13 +95,11 @@ func (s *Server) run() {
 		select {
 		case conn := <-s.register:
 			s.connections[conn] = true
-			log.Printf("VS Code extension connected")
 
 		case conn := <-s.unregister:
 			if _, ok := s.connections[conn]; ok {
 				delete(s.connections, conn)
 				conn.Close()
-				log.Printf("VS Code extension disconnected")
 			}
 
 		case message := <-s.broadcast:

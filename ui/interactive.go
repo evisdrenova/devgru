@@ -51,11 +51,12 @@ const (
 type ChatEntryType string
 
 const (
-	ChatEntryUser     ChatEntryType = "user"
-	ChatEntrySystem   ChatEntryType = "system"
-	ChatEntryPlanning ChatEntryType = "planning"
-	ChatEntryResult   ChatEntryType = "result"
-	ChatEntryError    ChatEntryType = "error"
+	ChatEntryUser       ChatEntryType = "user"
+	ChatEntrySystem     ChatEntryType = "system"
+	ChatEntryPlanning   ChatEntryType = "planning"
+	ChatEntryResult     ChatEntryType = "result"
+	ChatEntryError      ChatEntryType = "error"
+	ChatEntryProcessing ChatEntryType = "processing"
 )
 
 type PlanningStepMsg struct {
@@ -101,6 +102,15 @@ type RunCompleteMsg struct {
 type IDEContextUpdateMsg struct {
 	context *ide.IDEContext
 }
+type Block struct {
+	ID        string        // Unique identifier for the block
+	Type      ChatEntryType // Type of block
+	Content   string        // Main content
+	Status    StepStatus    // Status for processing blocks
+	Timestamp time.Time     // When the block was created
+	Data      interface{}   // Additional data
+	Children  []Block       // Child blocks (for nested content)
+}
 
 // ChatEntry represents a single entry in the chat history
 type ChatEntry struct {
@@ -121,9 +131,9 @@ type InteractiveModel struct {
 	ideServer *ide.Server
 
 	// Chat history and viewport
-	chatHistory []ChatEntry
-	viewport    viewport.Model
-	textArea    textarea.Model
+	blocks   []Block
+	viewport viewport.Model
+	textArea textarea.Model
 
 	// Current state for tracking ongoing operations
 	currentPrompt string
@@ -177,14 +187,9 @@ func (m *InteractiveModel) Init() tea.Cmd {
 }
 
 func NewInteractiveModel(r *runner.Runner, cfg *config.Config, ideServer *ide.Server) *InteractiveModel {
-	// Create viewport for chat history
-	vp := viewport.New(0, 0)
-	vp.Style = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("63")).
-		Padding(1)
 
-	// Create textarea for input
+	vp := viewport.New(0, 0)
+
 	ta := textarea.New()
 	ta.Placeholder = `Try "write a test for <filepath>"`
 	ta.Focus()
@@ -198,24 +203,15 @@ func NewInteractiveModel(r *runner.Runner, cfg *config.Config, ideServer *ide.Se
 	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 
-	// initial welcome message
-	chatHistory := []ChatEntry{
-		{
-			Type:      ChatEntrySystem,
-			Content:   "Welcome to DevGru Interactive Chat!",
-			Timestamp: time.Now(),
-		},
-	}
-
 	return &InteractiveModel{
-		runner:      r,
-		config:      cfg,
-		ideServer:   ideServer,
-		chatHistory: chatHistory,
-		viewport:    vp,
-		textArea:    ta,
-		ideContext:  &ide.IDEContext{},
-		keys:        DefaultGlobalKeyMap(),
+		runner:     r,
+		config:     cfg,
+		ideServer:  ideServer,
+		blocks:     []Block{},
+		viewport:   vp,
+		textArea:   ta,
+		ideContext: &ide.IDEContext{},
+		keys:       DefaultGlobalKeyMap(),
 	}
 }
 
@@ -224,26 +220,66 @@ func (m *InteractiveModel) View() string {
 		return "Loading..."
 	}
 
+	inputHeight := 4
+
+	m.viewport.Width = m.width
+	m.viewport.Height = m.height - inputHeight
+
+	content := m.buildFlowingContent()
+	m.viewport.SetContent(content)
+
+	inputArea := m.buildInputArea()
+
 	logoStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("208")).
 		Align(lipgloss.Center).
 		Width(m.width).
 		Padding(1, 0)
 
-	dglogo := `
-	 ██████╗  ███████╗ ██╗   ██╗  ██████╗  ██████╗  ██╗   ██╗
-	 ██╔══██╗ ██╔════╝ ██║   ██║ ██╔════╝  ██╔══██╗ ██║   ██║
-	 ██║  ██║ █████╗   ██║   ██║ ██║  ███╗ ██████╔╝ ██║   ██║
-	 ██║  ██║ ██╔══╝   ╚██╗ ██╔╝ ██║   ██║ ██╔══██╗ ██║   ██║
-	 ██████╔╝ ███████╗  ╚████╔╝  ╚██████╔╝ ██║  ██║ ╚██████╔╝
-	 ╚═════╝  ╚══════╝   ╚═══╝    ╚═════╝  ╚═╝  ╚═╝  ╚═════╝`
+	logo := logoStyle.Render(devgruLogo)
 
-	logo := logoStyle.Render(dglogo)
+	// Adjust viewport height to accommodate logo
+	logoHeight := lipgloss.Height(logo)
+	m.viewport.Height = m.height - inputHeight - logoHeight
 
-	statusStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Width(m.width)
+	// Create combined view with logo at top
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		logo,
+		m.viewport.View(),
+		inputArea,
+	)
 
+}
+
+func (m *InteractiveModel) buildFlowingContent() string {
+	if len(m.blocks) == 0 {
+		return ""
+	}
+
+	var content []string
+
+	// Add status line at the top when there are blocks
+	statusLine := m.buildStatusLine()
+	if statusLine != "" {
+		content = append(content, statusLine, "")
+	}
+
+	// Render all blocks in flowing order
+	for i, block := range m.blocks {
+		blockContent := m.renderBlock(block, i)
+		content = append(content, blockContent)
+
+		// Add spacing between blocks
+		if i < len(m.blocks)-1 {
+			content = append(content, "")
+		}
+	}
+
+	return strings.Join(content, "\n")
+}
+
+func (m *InteractiveModel) buildStatusLine() string {
 	var statusLeft string
 	if m.ideServer != nil && m.ideServer.IsConnected() {
 		statusLeft = fmt.Sprintf("Connected • Workers: %d", len(m.config.Workers))
@@ -256,6 +292,10 @@ func (m *InteractiveModel) View() string {
 		statusRight = fmt.Sprintf("📁 %s", m.ideContext.ActiveFile)
 	}
 
+	if statusLeft == "" && statusRight == "" {
+		return ""
+	}
+
 	leftW := lipgloss.Width(statusLeft)
 	rightW := lipgloss.Width(statusRight)
 	filler := m.width - 4 - leftW - rightW
@@ -263,45 +303,97 @@ func (m *InteractiveModel) View() string {
 		filler = 0
 	}
 
-	statusLine := statusLeft +
-		strings.Repeat(" ", filler) +
-		statusRight
+	statusLine := statusLeft + strings.Repeat(" ", filler) + statusRight
 
-	status := statusStyle.Render(statusLine)
+	statusStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Width(m.width).
+		Padding(0, 1)
 
-	// Chat viewport
-	// chatView := m.viewport.View()
+	return statusStyle.Render(statusLine)
+}
 
-	// Input area
+func (m *InteractiveModel) buildInputArea() string {
+	// Create input with border
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("63")).
-		Width(m.width - 6).
-		Padding(1)
+		Width(m.width-2).
+		Padding(0, 1)
 
-	inputContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		m.textArea.View(),
-	)
-
+	inputContent := m.textArea.View()
 	inputSection := inputStyle.Render(inputContent)
 
+	// Add help text
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
-		Padding(0, 2)
+		Padding(0, 1)
 
 	help := helpStyle.Render("enter: submit • ctrl+l: clear • ↑/↓: scroll • ctrl+c: quit")
 
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		logo,
-		status,
-		"",
-		// chatView,
-		inputSection,
-		help,
-		"",
-	)
+	return lipgloss.JoinVertical(lipgloss.Left, inputSection, help)
+}
+
+func (m *InteractiveModel) renderBlock(block Block, index int) string {
+	timestamp := block.Timestamp.Format("15:04:05")
+
+	switch block.Type {
+	case ChatEntryUser:
+		// User input block - distinctive styling
+		style := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Bold(true).
+			Padding(0, 1)
+
+		content := fmt.Sprintf("> %s", block.Content)
+		return style.Render(content)
+
+	case ChatEntryPlanning:
+		// Planning step block
+		style := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Padding(0, 1)
+
+		icon := m.getStatusIcon(block.Status)
+		return style.Render(fmt.Sprintf("● %s %s", icon, block.Content))
+
+	case ChatEntryResult:
+		// Result block with border
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("46")).
+			Padding(1).
+			Width(m.width - 4)
+
+		content := fmt.Sprintf("✅ %s", block.Content)
+		return style.Render(content)
+
+	case ChatEntryError:
+		// Error block with distinctive styling
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("196")).
+			Padding(1).
+			Width(m.width - 4)
+
+		return style.Render(block.Content)
+
+	case ChatEntrySystem:
+		// System message
+		style := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			Italic(true).
+			Padding(0, 1)
+
+		return style.Render(fmt.Sprintf("• %s", block.Content))
+
+	default:
+		// Default block styling
+		style := lipgloss.NewStyle().
+			Padding(0, 1)
+
+		return style.Render(fmt.Sprintf("[%s] %s", timestamp, block.Content))
+	}
 }
 
 func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -312,23 +404,16 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
-		// Reserve space for input area (6 lines) and status bar (2 lines)
-		viewportHeight := msg.Height - 8
-		m.viewport.Width = msg.Width - 4
-		m.viewport.Height = viewportHeight
-
-		m.textArea.SetWidth(msg.Width - 4)
-
-		// Update viewport content with new width
-		m.updateViewportContent()
+		m.textArea.SetWidth(msg.Width - 6)
 		return m, nil
 
 	case PlanningStepMsg:
-		// Append planning step to chat
-		m.addChatEntry(ChatEntry{
+		// Add planning step as a new block
+		m.addBlock(Block{
+			ID:        fmt.Sprintf("step_%d", len(m.blocks)),
 			Type:      ChatEntryPlanning,
-			Content:   fmt.Sprintf("%s %s", m.getStatusIcon(msg.Status), msg.Step),
+			Content:   msg.Step,
+			Status:    msg.Status,
 			Timestamp: time.Now(),
 			Data:      msg,
 		})
@@ -336,18 +421,21 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlanningCompleteMsg:
 		if msg.err != nil {
-			m.addChatEntry(ChatEntry{
+			m.addBlock(Block{
+				ID:        fmt.Sprintf("error_%d", len(m.blocks)),
 				Type:      ChatEntryError,
 				Content:   fmt.Sprintf("❌ Planning failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
 			})
 			m.isProcessing = false
 		} else {
-			// Add the final plan to chat
+			// Add the final plan block
 			planContent := m.formatPlanResult(msg.plan)
-			m.addChatEntry(ChatEntry{
+			m.addBlock(Block{
+				ID:        fmt.Sprintf("plan_%d", len(m.blocks)),
 				Type:      ChatEntryPlanning,
 				Content:   planContent,
+				Status:    StatusComplete,
 				Timestamp: time.Now(),
 				Data:      msg.plan,
 			})
@@ -360,15 +448,17 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RunCompleteMsg:
 		m.isProcessing = false
 		if msg.err != nil {
-			m.addChatEntry(ChatEntry{
+			m.addBlock(Block{
+				ID:        fmt.Sprintf("error_%d", len(m.blocks)),
 				Type:      ChatEntryError,
 				Content:   fmt.Sprintf("❌ Execution failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
 			})
 		} else {
-			// Add execution result to chat
+			// Add execution result block
 			resultContent := m.formatRunResult(msg.result)
-			m.addChatEntry(ChatEntry{
+			m.addBlock(Block{
+				ID:        fmt.Sprintf("result_%d", len(m.blocks)),
 				Type:      ChatEntryResult,
 				Content:   resultContent,
 				Timestamp: time.Now(),
@@ -393,8 +483,10 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.isProcessing {
 				input := strings.TrimSpace(m.textArea.Value())
 				if input != "" {
-					// Add user message to chat
-					m.addChatEntry(ChatEntry{
+
+					// Add user input as a block
+					m.addBlock(Block{
+						ID:        fmt.Sprintf("user_%d", len(m.blocks)),
 						Type:      ChatEntryUser,
 						Content:   input,
 						Timestamp: time.Now(),
@@ -412,14 +504,9 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Clear):
-			m.chatHistory = []ChatEntry{
-				{
-					Type:      ChatEntrySystem,
-					Content:   "Chat cleared.",
-					Timestamp: time.Now(),
-				},
-			}
-			m.updateViewportContent()
+			// Clear all blocks and show logo again
+			m.blocks = []Block{}
+			m.isProcessing = false
 			return m, nil
 
 		case key.Matches(msg, m.keys.Up):
@@ -443,60 +530,12 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// Helper methods
+// Block management methods
 
-func (m *InteractiveModel) addChatEntry(entry ChatEntry) {
-	m.chatHistory = append(m.chatHistory, entry)
-	m.updateViewportContent()
-	// Auto-scroll to bottom
+func (m *InteractiveModel) addBlock(block Block) {
+	m.blocks = append(m.blocks, block)
+	// Auto-scroll to bottom to show new content
 	m.viewport.GotoBottom()
-}
-
-func (m *InteractiveModel) updateViewportContent() {
-	var content []string
-
-	for _, entry := range m.chatHistory {
-		content = append(content, m.formatChatEntry(entry))
-		content = append(content, "") // Add spacing between entries
-	}
-
-	m.viewport.SetContent(strings.Join(content, "\n"))
-}
-
-func (m *InteractiveModel) formatChatEntry(entry ChatEntry) string {
-	timestamp := entry.Timestamp.Format("15:04:05")
-
-	switch entry.Type {
-	case ChatEntryUser:
-		style := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
-			Bold(true)
-		return style.Render(fmt.Sprintf("[%s] You: %s", timestamp, entry.Content))
-
-	case ChatEntrySystem:
-		style := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Italic(true)
-		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
-
-	case ChatEntryPlanning:
-		style := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214"))
-		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
-
-	case ChatEntryResult:
-		style := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("46"))
-		return style.Render(fmt.Sprintf("[%s] ✅ %s", timestamp, entry.Content))
-
-	case ChatEntryError:
-		style := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196"))
-		return style.Render(fmt.Sprintf("[%s] %s", timestamp, entry.Content))
-
-	default:
-		return fmt.Sprintf("[%s] %s", timestamp, entry.Content)
-	}
 }
 
 func (m *InteractiveModel) getStatusIcon(status StepStatus) string {
