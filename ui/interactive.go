@@ -373,9 +373,9 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 
 		var content string
 		if block.ParentID != "" {
-			content = fmt.Sprintf("%s✅ %s", treePrefix, block.Content)
+			content = fmt.Sprintf("%s✓ %s", treePrefix, block.Content)
 		} else {
-			content = fmt.Sprintf("✅ %s", block.Content)
+			content = fmt.Sprintf("✓ %s", block.Content)
 		}
 		return style.Render(content)
 
@@ -444,7 +444,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("error_%d", len(m.blocks)),
 				Type:      ChatEntryError,
-				Content:   fmt.Sprintf("❌ Planning failed: %s", msg.err.Error()),
+				Content:   fmt.Sprintf("Planning failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
 				ParentID:  m.currentUserID,
 				IsLast:    true,
@@ -474,7 +474,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("error_%d", len(m.blocks)),
 				Type:      ChatEntryError,
-				Content:   fmt.Sprintf("❌ Execution failed: %s", msg.err.Error()),
+				Content:   fmt.Sprintf("Execution failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
 				ParentID:  m.currentUserID,
 				IsLast:    true,
@@ -590,11 +590,11 @@ func (m *InteractiveModel) updateLastChildStatus(parentID string) {
 func (m *InteractiveModel) getStatusIcon(status StepStatus) string {
 	switch status {
 	case StatusWorking:
-		return "🔄"
+		return "⏳" // Hourglass for working
 	case StatusComplete:
-		return "✅"
+		return "✓" // Simple green checkmark
 	case StatusError:
-		return "❌"
+		return "✗" // Simple red X
 	default:
 		return "•"
 	}
@@ -625,14 +625,14 @@ func (m *InteractiveModel) formatRunResult(result *runner.RunResult) string {
 		content += "\n\nResults:"
 		for _, worker := range result.Workers {
 			if worker.Error != nil {
-				content += fmt.Sprintf("\n❌ %s: %s", worker.WorkerID, worker.Error.Error())
+				content += fmt.Sprintf("\n✗ %s: %s", worker.WorkerID, worker.Error.Error())
 			} else {
 				// Truncate long content for display
 				workerContent := worker.Content
 				if len(workerContent) > 200 {
 					workerContent = workerContent[:200] + "..."
 				}
-				content += fmt.Sprintf("\n✅ %s: %s", worker.WorkerID, workerContent)
+				content += fmt.Sprintf("\n✓ %s: %s", worker.WorkerID, workerContent)
 			}
 		}
 	}
@@ -653,7 +653,7 @@ func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 		func() tea.Msg {
 			time.Sleep(500 * time.Millisecond)
 			return PlanningStepMsg{
-				Step:        "✅ Request analyzed",
+				Step:        "Request analyzed",
 				Description: "Context and requirements understood",
 				Status:      StatusComplete,
 			}
@@ -669,7 +669,7 @@ func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 		func() tea.Msg {
 			time.Sleep(2 * time.Second)
 			return PlanningStepMsg{
-				Step:        "✅ Worker plans received",
+				Step:        "Worker plans received",
 				Description: "All workers have submitted their plans",
 				Status:      StatusComplete,
 			}
