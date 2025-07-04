@@ -134,8 +134,9 @@ type InteractiveModel struct {
 	textArea      textarea.Model
 	currentUserID string
 
-	currentPrompt string
-	isProcessing  bool
+	currentPrompt   string
+	isProcessing    bool
+	processingSteps map[string]int
 
 	ideContext *ide.IDEContext
 
@@ -200,14 +201,15 @@ func NewInteractiveModel(r *runner.Runner, cfg *config.Config, ideServer *ide.Se
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 
 	return &InteractiveModel{
-		runner:     r,
-		config:     cfg,
-		ideServer:  ideServer,
-		blocks:     []Block{},
-		viewport:   vp,
-		textArea:   ta,
-		ideContext: &ide.IDEContext{},
-		keys:       DefaultGlobalKeyMap(),
+		runner:          r,
+		config:          cfg,
+		ideServer:       ideServer,
+		blocks:          []Block{},
+		viewport:        vp,
+		textArea:        ta,
+		ideContext:      &ide.IDEContext{},
+		keys:            DefaultGlobalKeyMap(),
+		processingSteps: make(map[string]int),
 	}
 }
 
@@ -325,9 +327,9 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 	var treePrefix string
 	if block.ParentID != "" {
 		if block.IsLast {
-			treePrefix = "└─ "
+			treePrefix = "    └─ " // More padding for indentation
 		} else {
-			treePrefix = "├─ "
+			treePrefix = "    ├─ " // More padding for indentation
 		}
 	}
 
@@ -343,7 +345,7 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		return style.Render(content)
 
 	case ChatEntryPlanning:
-		// Planning step block with tree structure
+		// Planning step block with tree structure - icon after text
 		var style lipgloss.Style
 		if block.Status == StatusComplete {
 			style = lipgloss.NewStyle().
@@ -360,7 +362,7 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		}
 
 		icon := m.getStatusIcon(block.Status)
-		content := fmt.Sprintf("%s%s %s", treePrefix, icon, block.Content)
+		content := fmt.Sprintf("%s%s %s", treePrefix, block.Content, icon)
 		return style.Render(content)
 
 	case ChatEntryResult:
@@ -373,9 +375,9 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 
 		var content string
 		if block.ParentID != "" {
-			content = fmt.Sprintf("%s✓ %s", treePrefix, block.Content)
+			content = fmt.Sprintf("%s%s ✓", treePrefix, block.Content)
 		} else {
-			content = fmt.Sprintf("✓ %s", block.Content)
+			content = fmt.Sprintf("%s ✓", block.Content)
 		}
 		return style.Render(content)
 
@@ -389,9 +391,9 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 
 		var content string
 		if block.ParentID != "" {
-			content = fmt.Sprintf("%s%s", treePrefix, block.Content)
+			content = fmt.Sprintf("%s%s ✗", treePrefix, block.Content)
 		} else {
-			content = block.Content
+			content = fmt.Sprintf("%s ✗", block.Content)
 		}
 		return style.Render(content)
 
@@ -426,17 +428,51 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case PlanningStepMsg:
-		// Add planning step as a child of the current user prompt
-		stepID := fmt.Sprintf("step_%d_%d", len(m.blocks), time.Now().UnixNano())
-		m.addBlockAsChild(Block{
-			ID:        stepID,
-			Type:      ChatEntryPlanning,
-			Content:   msg.Step,
-			Status:    msg.Status,
-			Timestamp: time.Now(),
-			Data:      msg,
-			ParentID:  m.currentUserID,
-		})
+		// Check if this step already exists and update it in place
+		stepKey := msg.Step
+		if existingIndex, exists := m.processingSteps[stepKey]; exists {
+			// Update existing block
+			if existingIndex < len(m.blocks) {
+				m.blocks[existingIndex].Status = msg.Status
+				// Update content based on status and step type
+				if stepKey == "analyze" {
+					if msg.Status == StatusWorking {
+						m.blocks[existingIndex].Content = "Analyzing request"
+					} else {
+						m.blocks[existingIndex].Content = "Request analyzed"
+					}
+				} else if stepKey == "workers" {
+					if msg.Status == StatusWorking {
+						m.blocks[existingIndex].Content = "Consulting AI workers"
+					} else {
+						m.blocks[existingIndex].Content = "Worker plans received"
+					}
+				}
+			}
+		} else {
+			// Add new planning step as a child of the current user prompt
+			stepID := fmt.Sprintf("step_%d_%d", len(m.blocks), time.Now().UnixNano())
+			m.processingSteps[stepKey] = len(m.blocks)
+
+			var content string
+			if stepKey == "analyze" {
+				content = "Analyzing request"
+			} else if stepKey == "workers" {
+				content = "Consulting AI workers"
+			} else {
+				content = msg.Step
+			}
+
+			m.addBlockAsChild(Block{
+				ID:        stepID,
+				Type:      ChatEntryPlanning,
+				Content:   content,
+				Status:    msg.Status,
+				Timestamp: time.Now(),
+				Data:      msg,
+				ParentID:  m.currentUserID,
+			})
+		}
 		return m, nil
 
 	case PlanningCompleteMsg:
@@ -536,6 +572,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Clear all blocks
 			m.blocks = []Block{}
 			m.currentUserID = ""
+			m.processingSteps = make(map[string]int)
 			m.isProcessing = false
 			return m, nil
 
@@ -587,19 +624,6 @@ func (m *InteractiveModel) updateLastChildStatus(parentID string) {
 	}
 }
 
-func (m *InteractiveModel) getStatusIcon(status StepStatus) string {
-	switch status {
-	case StatusWorking:
-		return "⏳" // Hourglass for working
-	case StatusComplete:
-		return "✓" // Simple green checkmark
-	case StatusError:
-		return "✗" // Simple red X
-	default:
-		return "•"
-	}
-}
-
 func (m *InteractiveModel) formatPlanResult(plan *PlanResult) string {
 	content := "🎯 PROPOSED PLAN\n\n" + plan.FinalPlan
 
@@ -643,33 +667,37 @@ func (m *InteractiveModel) formatRunResult(result *runner.RunResult) string {
 // Planning and execution methods (keep your existing logic)
 func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 	return tea.Batch(
+		// First step: Analyzing request
 		func() tea.Msg {
 			return PlanningStepMsg{
-				Step:        "Analyzing request",
+				Step:        "analyze",
 				Description: "Understanding the context and requirements",
 				Status:      StatusWorking,
 			}
 		},
+		// Update the analyzing step to completed
 		func() tea.Msg {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(1 * time.Second) // Reduced from 2s
 			return PlanningStepMsg{
-				Step:        "Request analyzed",
+				Step:        "analyze",
 				Description: "Context and requirements understood",
 				Status:      StatusComplete,
 			}
 		},
+		// Second step: Consulting workers
 		func() tea.Msg {
-			time.Sleep(1 * time.Second)
+			time.Sleep(1500 * time.Millisecond) // Reduced from 3s
 			return PlanningStepMsg{
-				Step:        "Consulting AI workers",
+				Step:        "workers",
 				Description: fmt.Sprintf("Getting plans from %d workers", len(m.config.Workers)),
 				Status:      StatusWorking,
 			}
 		},
+		// Update workers step to completed
 		func() tea.Msg {
-			time.Sleep(2 * time.Second)
+			time.Sleep(2500 * time.Millisecond) // Reduced from 5s
 			return PlanningStepMsg{
-				Step:        "Worker plans received",
+				Step:        "workers",
 				Description: "All workers have submitted their plans",
 				Status:      StatusComplete,
 			}
@@ -678,9 +706,22 @@ func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 	)
 }
 
+func (m *InteractiveModel) getStatusIcon(status StepStatus) string {
+	switch status {
+	case StatusWorking:
+		return "⠋"
+	case StatusComplete:
+		return "✓"
+	case StatusError:
+		return "✗"
+	default:
+		return "•"
+	}
+}
+
 func (m *InteractiveModel) runPlanningProcess(prompt string) tea.Cmd {
 	return func() tea.Msg {
-		time.Sleep(3 * time.Second)
+		time.Sleep(3500 * time.Millisecond) // Reduced from 3s, starts after workers complete
 
 		finalPlan := &PlanResult{
 			FinalPlan: m.generateMockPlan(prompt),
@@ -698,7 +739,6 @@ func (m *InteractiveModel) runPlanningProcess(prompt string) tea.Cmd {
 		return PlanningCompleteMsg{plan: finalPlan}
 	}
 }
-
 func (m *InteractiveModel) generateMockPlan(prompt string) string {
 	return fmt.Sprintf(`Analysis of request: "%s"
 
