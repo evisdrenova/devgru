@@ -118,7 +118,7 @@ func (m *InteractiveModel) buildFlowingContent() string {
 	content = append(content, logo, "")
 
 	for i, block := range m.blocks {
-		blockContent := m.renderBlock(block, i)
+		blockContent := m.renderBlock(block)
 		content = append(content, blockContent)
 
 		// Don't add spacing between child blocks to keep tree connected
@@ -190,13 +190,13 @@ func (m *InteractiveModel) buildInputArea() string {
 	return lipgloss.JoinVertical(lipgloss.Left, statusLine, inputSection, help)
 }
 
-func (m *InteractiveModel) renderBlock(block Block, index int) string {
+func (m *InteractiveModel) renderBlock(block Block) string {
 	timestamp := block.Timestamp.Format("15:04:05")
 
 	treePrefix := "• "
 
 	switch block.Type {
-	case ChatEntryUser:
+	case BlockEntryUser:
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39")).
 			Bold(true).
@@ -205,7 +205,7 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		content := fmt.Sprintf("> %s", block.Content)
 		return style.Render(content)
 
-	case ChatEntryPlanning:
+	case BlockEntryPlanning:
 		var style lipgloss.Style
 
 		switch block.Status {
@@ -229,7 +229,7 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		content := fmt.Sprintf("%s%s %s%s", treePrefix, block.Content, icon, timer)
 		return style.Render(content)
 
-	case ChatEntryResult:
+	case BlockEntryResult:
 		// Result block with border and tree structure if it has a parent
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -245,7 +245,7 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		}
 		return style.Render(content)
 
-	case ChatEntryError:
+	case BlockEntryError:
 		// Error block with distinctive styling and tree structure if it has a parent
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -261,7 +261,7 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		}
 		return style.Render(content)
 
-	case ChatEntrySystem:
+	case BlockEntrySystem:
 		// System message
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
@@ -334,7 +334,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.addBlockAsChild(Block{
 				ID:        stepID,
-				Type:      ChatEntryPlanning,
+				Type:      BlockEntryPlanning,
 				Content:   content,
 				Status:    msg.Status,
 				Timestamp: time.Now(),
@@ -349,7 +349,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("error_%d", len(m.blocks)),
-				Type:      ChatEntryError,
+				Type:      BlockEntryError,
 				Content:   fmt.Sprintf("Planning failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
 				ParentID:  m.currentUserID,
@@ -361,7 +361,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			planContent := m.formatPlanResult(msg.plan)
 			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("plan_%d", len(m.blocks)),
-				Type:      ChatEntryPlanning,
+				Type:      BlockEntryPlanning,
 				Content:   planContent,
 				Status:    StatusComplete,
 				Timestamp: time.Now(),
@@ -379,7 +379,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("error_%d", len(m.blocks)),
-				Type:      ChatEntryError,
+				Type:      BlockEntryError,
 				Content:   fmt.Sprintf("Execution failed: %s", msg.err.Error()),
 				Timestamp: time.Now(),
 				ParentID:  m.currentUserID,
@@ -390,7 +390,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			resultContent := m.formatRunResult(msg.result)
 			m.addBlockAsChild(Block{
 				ID:        fmt.Sprintf("result_%d", len(m.blocks)),
-				Type:      ChatEntryResult,
+				Type:      BlockEntryResult,
 				Content:   resultContent,
 				Timestamp: time.Now(),
 				Data:      msg.result,
@@ -422,7 +422,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					m.addBlock(Block{
 						ID:        userID,
-						Type:      ChatEntryUser,
+						Type:      BlockEntryUser,
 						Content:   input,
 						Timestamp: time.Now(),
 					})
@@ -596,7 +596,7 @@ func (m *InteractiveModel) executePlan() tea.Cmd {
 		// Get the latest plan from the last PlanningCompleteMsg
 		var plan *runner.PlanResult
 		for i := len(m.blocks) - 1; i >= 0; i-- {
-			if m.blocks[i].Type == ChatEntryPlanning && m.blocks[i].Data != nil {
+			if m.blocks[i].Type == BlockEntryPlanning && m.blocks[i].Data != nil {
 				if planResult, ok := m.blocks[i].Data.(*runner.PlanResult); ok {
 					plan = planResult
 					break

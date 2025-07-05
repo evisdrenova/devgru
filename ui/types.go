@@ -38,15 +38,15 @@ const (
 	PlanStepDelete = runner.PlanStepDelete
 )
 
-type ChatEntryType string
+type BlockEntryType string
 
 const (
-	ChatEntryUser       ChatEntryType = "user"
-	ChatEntrySystem     ChatEntryType = "system"
-	ChatEntryPlanning   ChatEntryType = "planning"
-	ChatEntryResult     ChatEntryType = "result"
-	ChatEntryError      ChatEntryType = "error"
-	ChatEntryProcessing ChatEntryType = "processing"
+	BlockEntryUser       BlockEntryType = "user"
+	BlockEntrySystem     BlockEntryType = "system"
+	BlockEntryPlanning   BlockEntryType = "planning"
+	BlockEntryResult     BlockEntryType = "result"
+	BlockEntryError      BlockEntryType = "error"
+	BlockEntryProcessing BlockEntryType = "processing"
 )
 
 type PlanningStepMsg struct {
@@ -85,7 +85,7 @@ type TimerUpdateMsg struct {
 }
 type Block struct {
 	ID        string
-	Type      ChatEntryType
+	Type      BlockEntryType
 	Content   string
 	Status    StepStatus
 	Timestamp time.Time
@@ -97,8 +97,8 @@ type Block struct {
 	Duration  time.Duration
 }
 
-type ChatEntry struct {
-	Type      ChatEntryType
+type BlockEntry struct {
+	Type      BlockEntryType
 	Content   string
 	Timestamp time.Time
 	Data      interface{}
@@ -123,7 +123,7 @@ type InteractiveModel struct {
 
 	ideContext *ide.IDEContext
 
-	keys GlobalKeyMap
+	keys            GlobalKeyMap
 	lastTimerUpdate time.Time
 }
 

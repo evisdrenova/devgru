@@ -248,7 +248,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 - Inspired by multi-agent AI research
 - Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) for beautiful TUIs
-- VS Code integration inspired by [Claude Code](https://claude.ai/chat)
+- VS Code integration inspired by [Claude Code](https://claude.ai/Block)
 
 ---
 
