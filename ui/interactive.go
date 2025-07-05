@@ -48,6 +48,7 @@ func DefaultGlobalKeyMap() GlobalKeyMap {
 func (m *InteractiveModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.pollIDEContext(),
+		m.tickTimer(),
 	)
 }
 
@@ -78,6 +79,7 @@ func NewInteractiveModel(r *runner.Runner, cfg *config.Config, ideServer *ide.Se
 		ideContext:      &ide.IDEContext{},
 		keys:            DefaultGlobalKeyMap(),
 		processingSteps: make(map[string]int),
+		lastTimerUpdate: time.Now(),
 	}
 }
 
@@ -223,7 +225,8 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		}
 
 		icon := m.getStatusIcon(block.Status)
-		content := fmt.Sprintf("%s%s %s", treePrefix, block.Content, icon)
+		timer := m.getTimerDisplay(block)
+		content := fmt.Sprintf("%s%s %s%s", treePrefix, block.Content, icon, timer)
 		return style.Render(content)
 
 	case ChatEntryResult:
@@ -294,6 +297,10 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if existingIndex, exists := m.processingSteps[stepKey]; exists {
 			// Update existing block
 			if existingIndex < len(m.blocks) {
+				// Set start time if transitioning to working status
+				if m.blocks[existingIndex].Status != StatusWorking && msg.Status == StatusWorking {
+					m.blocks[existingIndex].StartTime = time.Now()
+				}
 				m.blocks[existingIndex].Status = msg.Status
 				// Update content based on status and step type
 				if stepKey == "analyze" {
@@ -333,6 +340,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Timestamp: time.Now(),
 				Data:      msg,
 				ParentID:  m.currentUserID,
+				StartTime: time.Now(),
 			})
 		}
 		return m, nil
@@ -436,6 +444,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentUserID = ""
 			m.processingSteps = make(map[string]int)
 			m.isProcessing = false
+			m.lastTimerUpdate = time.Now()
 			return m, nil
 
 		case key.Matches(msg, m.keys.Up):
@@ -612,4 +621,31 @@ func (m *InteractiveModel) pollIDEContext() tea.Cmd {
 		}
 		return IDEContextUpdateMsg{context: nil}
 	})
+}
+
+func (m *InteractiveModel) tickTimer() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return TimerUpdateMsg{timestamp: t}
+	})
+}
+
+func (m *InteractiveModel) updateTimers() {
+	now := time.Now()
+	for i := range m.blocks {
+		if m.blocks[i].Status == StatusWorking && !m.blocks[i].StartTime.IsZero() {
+			m.blocks[i].Duration = now.Sub(m.blocks[i].StartTime)
+		}
+	}
+}
+
+func (m *InteractiveModel) getTimerDisplay(block Block) string {
+	if block.Status == StatusWorking && !block.StartTime.IsZero() {
+		duration := block.Duration
+		if duration.Seconds() < 60 {
+			return fmt.Sprintf(" (%.1fs)", duration.Seconds())
+		} else {
+			return fmt.Sprintf(" (%.0fm %.0fs)", duration.Minutes(), duration.Seconds()-60*duration.Minutes())
+		}
+	}
+	return ""
 }

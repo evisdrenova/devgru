@@ -79,6 +79,10 @@ type RunCompleteMsg struct {
 type IDEContextUpdateMsg struct {
 	context *ide.IDEContext
 }
+
+type TimerUpdateMsg struct {
+	timestamp time.Time
+}
 type Block struct {
 	ID        string
 	Type      ChatEntryType
@@ -89,6 +93,8 @@ type Block struct {
 	ParentID  string
 	Children  []Block
 	IsLast    bool
+	StartTime time.Time
+	Duration  time.Duration
 }
 
 type ChatEntry struct {
@@ -118,6 +124,7 @@ type InteractiveModel struct {
 	ideContext *ide.IDEContext
 
 	keys GlobalKeyMap
+	lastTimerUpdate time.Time
 }
 
 type GlobalKeyMap struct {
