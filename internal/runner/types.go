@@ -50,3 +50,31 @@ type Consensus struct {
 	Reasoning    string  `json:"reasoning"`    // Why this consensus was chosen
 	Participants int     `json:"participants"` // Number of workers that succeeded
 }
+
+// PlanStepType represents the type of a plan step
+type PlanStepType string
+
+const (
+	PlanStepRead   PlanStepType = "read"
+	PlanStepUpdate PlanStepType = "update"
+	PlanStepCreate PlanStepType = "create"
+	PlanStepDelete PlanStepType = "delete"
+)
+
+// PlanStep represents a single step in a plan
+type PlanStep struct {
+	Number      int          `json:"number"`
+	Title       string       `json:"title"`
+	Description string       `json:"description"`
+	Type        PlanStepType `json:"type"`
+	Files       []string     `json:"files"`
+}
+
+// PlanResult represents the result of a planning phase
+type PlanResult struct {
+	TargetFile   string     `json:"target_file"`
+	Steps        []PlanStep `json:"steps"`
+	SelectedPlan string     `json:"selected_plan"`
+	Confidence   float64    `json:"confidence"`
+	Reasoning    string     `json:"reasoning"`
+}

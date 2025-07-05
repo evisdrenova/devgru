@@ -241,3 +241,91 @@ func (r *Runner) GetStats() map[string]interface{} {
 		"algorithm": r.config.Consensus.Algorithm,
 	}
 }
+
+// GeneratePlan uses the configured workers to generate a plan for the given prompt
+func (r *Runner) GeneratePlan(prompt string, ideContext interface{}) (*PlanResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), r.config.Consensus.Timeout)
+	defer cancel()
+
+	// Use the first worker to generate the plan
+	if len(r.config.Workers) == 0 {
+		return nil, fmt.Errorf("no workers configured")
+	}
+
+	worker := r.config.Workers[0]
+	
+	// Get the provider for this worker
+	prov, err := r.providerManager.GetProvider(worker.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get provider %s: %w", worker.Provider, err)
+	}
+
+	// Create a planning-specific prompt
+	planningPrompt := fmt.Sprintf(`Please analyze the following request and create a detailed plan:
+
+Request: %s
+
+Please provide a structured plan with:
+1. Target file analysis
+2. Step-by-step implementation plan
+3. Confidence level (0-1)
+4. Reasoning for the approach
+
+Format your response as a clear, structured plan.`, prompt)
+
+	// Set up options for the provider
+	opts := provider.Options{
+		Temperature:  0.3, // Lower temperature for more consistent planning
+		MaxTokens:    worker.MaxTokens,
+		SystemPrompt: "You are a helpful coding assistant that creates detailed implementation plans.",
+		Stream:       false, // Don't stream for planning
+	}
+
+	// Execute the request
+	responseChan, err := prov.Ask(ctx, planningPrompt, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ask provider: %w", err)
+	}
+
+	// Collect the response
+	collector := provider.NewStreamCollector()
+	collector.Collect(ctx, responseChan)
+
+	if collector.Error != nil {
+		return nil, collector.Error
+	}
+
+	// Parse the response into a PlanResult
+	// For now, create a simple plan structure
+	plan := &PlanResult{
+		TargetFile:   "based on context", // This could be enhanced to use ideContext
+		Steps:        []PlanStep{
+			{Number: 1, Title: "Analyze requirements", Type: PlanStepRead},
+			{Number: 2, Title: "Implement solution", Type: PlanStepUpdate},
+			{Number: 3, Title: "Test changes", Type: PlanStepRead},
+		},
+		SelectedPlan: prov.GetModel(),
+		Confidence:   0.85,
+		Reasoning:    collector.Content,
+	}
+
+	return plan, nil
+}
+
+// ExecutePlan executes the given plan using the configured workers
+func (r *Runner) ExecutePlan(plan *PlanResult, ideContext interface{}) (*RunResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), r.config.Consensus.Timeout)
+	defer cancel()
+
+	// Create an execution prompt based on the plan
+	executionPrompt := fmt.Sprintf(`Execute the following plan:
+
+Plan: %s
+
+Reasoning: %s
+
+Please implement the solution step by step.`, plan.SelectedPlan, plan.Reasoning)
+
+	// Use the existing Run method to execute the plan
+	return r.Run(ctx, executionPrompt)
+}

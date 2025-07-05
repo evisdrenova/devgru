@@ -6,23 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
-
-// Server handles WebSocket connections from VS Code extension
-type Server struct {
-	config      Config
-	context     *IDEContext
-	connections map[*websocket.Conn]bool
-	broadcast   chan []byte
-	register    chan *websocket.Conn
-	unregister  chan *websocket.Conn
-	mu          sync.RWMutex
-	running     bool
-}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {

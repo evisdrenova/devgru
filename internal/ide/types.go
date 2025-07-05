@@ -1,6 +1,11 @@
 package ide
 
-import "time"
+import (
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
 
 // Config represents IDE integration configuration
 type Config struct {
@@ -72,3 +77,15 @@ const DiffStartMarker = "<<<DEVGRU_DIFF_START>>>"
 
 // DiffEndMarker marks the end of a diff block
 const DiffEndMarker = "<<<DEVGRU_DIFF_END>>>"
+
+// Server handles WebSocket connections from VS Code extension
+type Server struct {
+	config      Config
+	context     *IDEContext
+	connections map[*websocket.Conn]bool
+	broadcast   chan []byte
+	register    chan *websocket.Conn
+	unregister  chan *websocket.Conn
+	mu          sync.RWMutex
+	running     bool
+}

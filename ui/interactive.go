@@ -14,143 +14,11 @@ import (
 
 	"github.com/evisdrenova/devgru/internal/config"
 	"github.com/evisdrenova/devgru/internal/ide"
-	"github.com/evisdrenova/devgru/internal/provider"
 	"github.com/evisdrenova/devgru/internal/runner"
 )
 
 //go:embed devgru_logo.txt
 var devgruLogo string
-
-// AppState represents the current state of the application (kept for compatibility)
-type AppState int
-
-type StepStatus string
-
-const (
-	StateInput AppState = iota
-	StatePlanning
-	StateResults
-	StateError
-)
-
-const (
-	StatusWorking  StepStatus = "working"
-	StatusComplete StepStatus = "complete"
-	StatusError    StepStatus = "error"
-)
-
-type PlanStepType string
-
-const (
-	PlanStepRead   PlanStepType = "read"
-	PlanStepUpdate PlanStepType = "update"
-	PlanStepCreate PlanStepType = "create"
-	PlanStepDelete PlanStepType = "delete"
-)
-
-type ChatEntryType string
-
-const (
-	ChatEntryUser       ChatEntryType = "user"
-	ChatEntrySystem     ChatEntryType = "system"
-	ChatEntryPlanning   ChatEntryType = "planning"
-	ChatEntryResult     ChatEntryType = "result"
-	ChatEntryError      ChatEntryType = "error"
-	ChatEntryProcessing ChatEntryType = "processing"
-)
-
-type PlanningStepMsg struct {
-	Step        string     `json:"step"`
-	Description string     `json:"description"`
-	Status      StepStatus `json:"status"`
-}
-
-type PlanningCompleteMsg struct {
-	plan *PlanResult
-	err  error
-}
-
-type PlanResult struct {
-	FinalPlan    string
-	Steps        []PlanStep
-	SelectedPlan string
-	Confidence   float64
-	Reasoning    string
-}
-
-type PlanStep struct {
-	Number      int
-	Title       string
-	Description string
-	Type        PlanStepType
-	Files       []string
-}
-
-type WorkerPlan struct {
-	WorkerID string
-	Model    string
-	Plan     string
-	Score    float64
-}
-
-// Other messages
-type RunCompleteMsg struct {
-	result *runner.RunResult
-	err    error
-}
-
-type IDEContextUpdateMsg struct {
-	context *ide.IDEContext
-}
-type Block struct {
-	ID        string
-	Type      ChatEntryType
-	Content   string
-	Status    StepStatus
-	Timestamp time.Time
-	Data      interface{}
-	ParentID  string
-	Children  []Block
-	IsLast    bool
-}
-
-type ChatEntry struct {
-	Type      ChatEntryType
-	Content   string
-	Timestamp time.Time
-	Data      interface{}
-}
-
-type InteractiveModel struct {
-	width  int
-	height int
-
-	runner    *runner.Runner
-	config    *config.Config
-	ideServer *ide.Server
-
-	blocks        []Block
-	viewport      viewport.Model
-	textArea      textarea.Model
-	currentUserID string
-
-	currentPrompt   string
-	isProcessing    bool
-	processingSteps map[string]int
-
-	ideContext *ide.IDEContext
-
-	keys GlobalKeyMap
-}
-
-// GlobalKeyMap defines global key bindings
-type GlobalKeyMap struct {
-	Submit key.Binding
-	Clear  key.Binding
-	Quit   key.Binding
-	Up     key.Binding
-	Down   key.Binding
-}
 
 func DefaultGlobalKeyMap() GlobalKeyMap {
 	return GlobalKeyMap{
@@ -323,19 +191,10 @@ func (m *InteractiveModel) buildInputArea() string {
 func (m *InteractiveModel) renderBlock(block Block, index int) string {
 	timestamp := block.Timestamp.Format("15:04:05")
 
-	// Determine tree prefix based on parent relationship
-	var treePrefix string
-	if block.ParentID != "" {
-		if block.IsLast {
-			treePrefix = "    └─ " // More padding for indentation
-		} else {
-			treePrefix = "    ├─ " // More padding for indentation
-		}
-	}
+	treePrefix := "• "
 
 	switch block.Type {
 	case ChatEntryUser:
-		// User input block - distinctive styling
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39")).
 			Bold(true).
@@ -345,19 +204,21 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		return style.Render(content)
 
 	case ChatEntryPlanning:
-		// Planning step block with tree structure - icon after text
 		var style lipgloss.Style
-		if block.Status == StatusComplete {
+
+		switch block.Status {
+		case StatusComplete:
 			style = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("46")). // Green for completed
+				Foreground(lipgloss.Color("28")). // Green
 				Padding(0, 1)
-		} else if block.Status == StatusError {
+		case StatusError:
 			style = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("196")). // Red for error
+				Foreground(lipgloss.Color("196")). // Red
 				Padding(0, 1)
-		} else {
+
+		default:
 			style = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("214")). // Orange for working
+				Foreground(lipgloss.Color("214")). // Orange
 				Padding(0, 1)
 		}
 
@@ -369,7 +230,7 @@ func (m *InteractiveModel) renderBlock(block Block, index int) string {
 		// Result block with border and tree structure if it has a parent
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("46")).
+			BorderForeground(lipgloss.Color("28")).
 			Padding(1).
 			Width(m.width - 4)
 
@@ -443,7 +304,7 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				} else if stepKey == "workers" {
 					if msg.Status == StatusWorking {
-						m.blocks[existingIndex].Content = "Consulting AI workers"
+						m.blocks[existingIndex].Content = "Consulting workers"
 					} else {
 						m.blocks[existingIndex].Content = "Worker plans received"
 					}
@@ -455,11 +316,12 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.processingSteps[stepKey] = len(m.blocks)
 
 			var content string
-			if stepKey == "analyze" {
+			switch stepKey {
+			case "analyze":
 				content = "Analyzing request"
-			} else if stepKey == "workers" {
-				content = "Consulting AI workers"
-			} else {
+			case "workers":
+				content = "Consulting workers"
+			default:
 				content = msg.Step
 			}
 
@@ -577,40 +439,33 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Up):
-			m.viewport.LineUp(1)
+			m.viewport.ScrollUp(1)
 			return m, nil
 
 		case key.Matches(msg, m.keys.Down):
-			m.viewport.LineDown(1)
+			m.viewport.ScrollDown(1)
 			return m, nil
 		}
 	}
 
-	// Update textarea
 	m.textArea, cmd = m.textArea.Update(msg)
 	cmds = append(cmds, cmd)
 
-	// Update viewport
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
 }
 
-// Block management methods
-
 func (m *InteractiveModel) addBlock(block Block) {
 	m.blocks = append(m.blocks, block)
-	// Auto-scroll to bottom to show new content
 	m.viewport.GotoBottom()
 }
 
 func (m *InteractiveModel) addBlockAsChild(block Block) {
-	// Mark previous child as not last if this is a new child
 	m.updateLastChildStatus(block.ParentID)
 
 	m.blocks = append(m.blocks, block)
-	// Auto-scroll to bottom to show new content
 	m.viewport.GotoBottom()
 }
 
@@ -624,8 +479,8 @@ func (m *InteractiveModel) updateLastChildStatus(parentID string) {
 	}
 }
 
-func (m *InteractiveModel) formatPlanResult(plan *PlanResult) string {
-	content := "🎯 PROPOSED PLAN\n\n" + plan.FinalPlan
+func (m *InteractiveModel) formatPlanResult(plan *runner.PlanResult) string {
+	var content string
 
 	if len(plan.Steps) > 0 {
 		content += "\n\nSteps:"
@@ -641,9 +496,7 @@ func (m *InteractiveModel) formatPlanResult(plan *PlanResult) string {
 }
 
 func (m *InteractiveModel) formatRunResult(result *runner.RunResult) string {
-	content := fmt.Sprintf("Execution completed in %v", result.TotalDuration)
-	content += fmt.Sprintf("\nTokens used: %d", result.TotalTokens)
-	content += fmt.Sprintf("\nEstimated cost: $%.6f", result.EstimatedCost)
+	var content string
 
 	if len(result.Workers) > 0 {
 		content += "\n\nResults:"
@@ -664,7 +517,6 @@ func (m *InteractiveModel) formatRunResult(result *runner.RunResult) string {
 	return content
 }
 
-// Planning and execution methods (keep your existing logic)
 func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 	return tea.Batch(
 		// First step: Analyzing request
@@ -675,9 +527,9 @@ func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 				Status:      StatusWorking,
 			}
 		},
-		// Update the analyzing step to completed
+		// Update the analyzing step to completed after brief delay
 		func() tea.Msg {
-			time.Sleep(1 * time.Second) // Reduced from 2s
+			time.Sleep(500 * time.Millisecond)
 			return PlanningStepMsg{
 				Step:        "analyze",
 				Description: "Context and requirements understood",
@@ -686,7 +538,7 @@ func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 		},
 		// Second step: Consulting workers
 		func() tea.Msg {
-			time.Sleep(1500 * time.Millisecond) // Reduced from 3s
+			time.Sleep(700 * time.Millisecond)
 			return PlanningStepMsg{
 				Step:        "workers",
 				Description: fmt.Sprintf("Getting plans from %d workers", len(m.config.Workers)),
@@ -695,14 +547,14 @@ func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 		},
 		// Update workers step to completed
 		func() tea.Msg {
-			time.Sleep(2500 * time.Millisecond) // Reduced from 5s
+			time.Sleep(1000 * time.Millisecond)
 			return PlanningStepMsg{
 				Step:        "workers",
 				Description: "All workers have submitted their plans",
 				Status:      StatusComplete,
 			}
 		},
-		m.runPlanningProcess(prompt),
+		m.runPlanningProcess(),
 	)
 }
 
@@ -719,61 +571,36 @@ func (m *InteractiveModel) getStatusIcon(status StepStatus) string {
 	}
 }
 
-func (m *InteractiveModel) runPlanningProcess(prompt string) tea.Cmd {
+func (m *InteractiveModel) runPlanningProcess() tea.Cmd {
 	return func() tea.Msg {
-		time.Sleep(3500 * time.Millisecond) // Reduced from 3s, starts after workers complete
-
-		finalPlan := &PlanResult{
-			FinalPlan: m.generateMockPlan(prompt),
-			Steps: []PlanStep{
-				{Number: 1, Title: "Read current implementation", Type: PlanStepRead},
-				{Number: 2, Title: "Identify changes needed", Type: PlanStepUpdate},
-				{Number: 3, Title: "Implement changes", Type: PlanStepUpdate},
-				{Number: 4, Title: "Test changes", Type: PlanStepRead},
-			},
-			SelectedPlan: "claude-3-5-sonnet",
-			Confidence:   0.87,
-			Reasoning:    "Selected plan due to comprehensive analysis",
+		plan, err := m.runner.GeneratePlan(m.currentPrompt, m.ideContext)
+		if err != nil {
+			return PlanningCompleteMsg{plan: nil, err: err}
 		}
 
-		return PlanningCompleteMsg{plan: finalPlan}
+		return PlanningCompleteMsg{plan: plan}
 	}
-}
-func (m *InteractiveModel) generateMockPlan(prompt string) string {
-	return fmt.Sprintf(`Analysis of request: "%s"
-
-Implementation approach:
-1. Read current implementation
-2. Identify required changes  
-3. Implement modifications
-4. Test functionality
-
-Target file: %s`, prompt, m.ideContext.ActiveFile)
 }
 
 func (m *InteractiveModel) executePlan() tea.Cmd {
 	return func() tea.Msg {
-		time.Sleep(2 * time.Second)
-
-		result := &runner.RunResult{
-			Success:       true,
-			TotalDuration: time.Second * 2,
-			TotalTokens:   2500,
-			EstimatedCost: 0.004500,
-			Workers: []runner.WorkerResult{
-				{
-					WorkerID: "plan-executor",
-					Content:  "Plan executed successfully. Code has been updated according to the specifications.",
-					Stats: &provider.Stats{
-						Model:         "claude-3-5-sonnet",
-						Duration:      time.Second * 2,
-						EstimatedCost: 0.004500,
-					},
-				},
-			},
+		// Get the latest plan from the last PlanningCompleteMsg
+		var plan *runner.PlanResult
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			if m.blocks[i].Type == ChatEntryPlanning && m.blocks[i].Data != nil {
+				if planResult, ok := m.blocks[i].Data.(*runner.PlanResult); ok {
+					plan = planResult
+					break
+				}
+			}
 		}
 
-		return RunCompleteMsg{result: result, err: nil}
+		if plan == nil {
+			return RunCompleteMsg{result: nil, err: fmt.Errorf("no plan found to execute")}
+		}
+
+		result, err := m.runner.ExecutePlan(plan, m.ideContext)
+		return RunCompleteMsg{result: result, err: err}
 	}
 }
 
