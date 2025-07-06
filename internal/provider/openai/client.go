@@ -135,7 +135,7 @@ func (c *Client) streamRequest(ctx context.Context, prompt string, opts provider
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/Block/completions", bytes.NewReader(reqBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(reqBytes))
 	if err != nil {
 		responseChan <- provider.Response{
 			Error: &provider.ProviderError{

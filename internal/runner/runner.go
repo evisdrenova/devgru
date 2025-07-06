@@ -234,15 +234,15 @@ func (r *Runner) savePlanToFile(prompt, planContent string) error {
 	// Create a filename based on timestamp
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 	filename := fmt.Sprintf("plan_%s.md", timestamp)
-	
+
 	// Create plans directory if it doesn't exist
 	plansDir := "plans"
 	if err := os.MkdirAll(plansDir, 0755); err != nil {
 		return fmt.Errorf("failed to create plans directory: %w", err)
 	}
-	
+
 	filepath := filepath.Join(plansDir, filename)
-	
+
 	// Create the markdown content
 	markdownContent := fmt.Sprintf(`# Implementation Plan
 
@@ -253,16 +253,16 @@ func (r *Runner) savePlanToFile(prompt, planContent string) error {
 ---
 
 %s
-`, 
-		time.Now().Format("2006-01-02 15:04:05"), 
-		prompt, 
+`,
+		time.Now().Format("2006-01-02 15:04:05"),
+		prompt,
 		planContent)
-	
+
 	// Write to file
 	if err := os.WriteFile(filepath, []byte(markdownContent), 0644); err != nil {
 		return fmt.Errorf("failed to write plan file: %w", err)
 	}
-	
+
 	fmt.Printf("📋 Plan saved to: %s\n", filepath)
 	return nil
 }
@@ -293,7 +293,7 @@ func (r *Runner) GeneratePlan(prompt string, ideContext interface{}) (*PlanResul
 	}
 
 	worker := r.config.Workers[0]
-	
+
 	// Get the provider for this worker
 	prov, err := r.providerManager.GetProvider(worker.Provider)
 	if err != nil {
@@ -343,8 +343,8 @@ Format your response as a clear, structured markdown plan that could be saved to
 
 	// Create a structured plan result
 	plan := &PlanResult{
-		TargetFile:   "based on context", // This could be enhanced to use ideContext
-		Steps:        []PlanStep{
+		TargetFile: "based on context",
+		Steps: []PlanStep{
 			{Number: 1, Title: "Analyze and understand requirements", Type: PlanStepRead},
 			{Number: 2, Title: "Implement the solution", Type: PlanStepUpdate},
 		},
