@@ -303,17 +303,18 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.blocks[existingIndex].Status = msg.Status
 				// Update content based on status and step type
-				if stepKey == "analyze" {
+				switch stepKey {
+				case "analyze":
 					if msg.Status == StatusWorking {
 						m.blocks[existingIndex].Content = "Analyzing request"
 					} else {
 						m.blocks[existingIndex].Content = "Request analyzed"
 					}
-				} else if stepKey == "workers" {
+				case "generate":
 					if msg.Status == StatusWorking {
-						m.blocks[existingIndex].Content = "Consulting workers"
+						m.blocks[existingIndex].Content = "Generating detailed plan"
 					} else {
-						m.blocks[existingIndex].Content = "Worker plans received"
+						m.blocks[existingIndex].Content = "Plan generated"
 					}
 				}
 			}
@@ -326,8 +327,8 @@ func (m *InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch stepKey {
 			case "analyze":
 				content = "Analyzing request"
-			case "workers":
-				content = "Consulting workers"
+			case "generate":
+				content = "Generating detailed plan"
 			default:
 				content = msg.Step
 			}
@@ -491,6 +492,11 @@ func (m *InteractiveModel) updateLastChildStatus(parentID string) {
 func (m *InteractiveModel) formatPlanResult(plan *runner.PlanResult) string {
 	var content string
 
+	// Show the actual plan reasoning/content
+	if plan.Reasoning != "" {
+		content += plan.Reasoning
+	}
+
 	if len(plan.Steps) > 0 {
 		content += "\n\nSteps:"
 		for _, step := range plan.Steps {
@@ -536,33 +542,6 @@ func (m *InteractiveModel) startPlanning(prompt string) tea.Cmd {
 				Status:      StatusWorking,
 			}
 		},
-		// Update the analyzing step to completed after brief delay
-		func() tea.Msg {
-			time.Sleep(500 * time.Millisecond)
-			return PlanningStepMsg{
-				Step:        "analyze",
-				Description: "Context and requirements understood",
-				Status:      StatusComplete,
-			}
-		},
-		// Second step: Consulting workers
-		func() tea.Msg {
-			time.Sleep(700 * time.Millisecond)
-			return PlanningStepMsg{
-				Step:        "workers",
-				Description: fmt.Sprintf("Getting plans from %d workers", len(m.config.Workers)),
-				Status:      StatusWorking,
-			}
-		},
-		// Update workers step to completed
-		func() tea.Msg {
-			time.Sleep(1000 * time.Millisecond)
-			return PlanningStepMsg{
-				Step:        "workers",
-				Description: "All workers have submitted their plans",
-				Status:      StatusComplete,
-			}
-		},
 		m.runPlanningProcess(),
 	)
 }
@@ -581,14 +560,32 @@ func (m *InteractiveModel) getStatusIcon(status StepStatus) string {
 }
 
 func (m *InteractiveModel) runPlanningProcess() tea.Cmd {
-	return func() tea.Msg {
-		plan, err := m.runner.GeneratePlan(m.currentPrompt, m.ideContext)
-		if err != nil {
-			return PlanningCompleteMsg{plan: nil, err: err}
-		}
-
-		return PlanningCompleteMsg{plan: plan}
-	}
+	return tea.Sequence(
+		// Complete the analyze step
+		tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+			return PlanningStepMsg{
+				Step:        "analyze",
+				Description: "Context and requirements understood",
+				Status:      StatusComplete,
+			}
+		}),
+		// Start the generate step
+		tea.Tick(600*time.Millisecond, func(t time.Time) tea.Msg {
+			return PlanningStepMsg{
+				Step:        "generate",
+				Description: "Generating detailed plan",
+				Status:      StatusWorking,
+			}
+		}),
+		// Actually generate the plan
+		func() tea.Msg {
+			plan, err := m.runner.GeneratePlan(m.currentPrompt, m.ideContext)
+			if err != nil {
+				return PlanningCompleteMsg{plan: nil, err: err}
+			}
+			return PlanningCompleteMsg{plan: plan}
+		},
+	)
 }
 
 func (m *InteractiveModel) executePlan() tea.Cmd {

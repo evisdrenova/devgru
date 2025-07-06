@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -227,6 +229,44 @@ func (r *Runner) calculateAggregateStats(result *RunResult) {
 	result.EstimatedCost = totalCost
 }
 
+// savePlanToFile saves the generated plan to a markdown file
+func (r *Runner) savePlanToFile(prompt, planContent string) error {
+	// Create a filename based on timestamp
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	filename := fmt.Sprintf("plan_%s.md", timestamp)
+	
+	// Create plans directory if it doesn't exist
+	plansDir := "plans"
+	if err := os.MkdirAll(plansDir, 0755); err != nil {
+		return fmt.Errorf("failed to create plans directory: %w", err)
+	}
+	
+	filepath := filepath.Join(plansDir, filename)
+	
+	// Create the markdown content
+	markdownContent := fmt.Sprintf(`# Implementation Plan
+
+**Generated:** %s
+
+**Request:** %s
+
+---
+
+%s
+`, 
+		time.Now().Format("2006-01-02 15:04:05"), 
+		prompt, 
+		planContent)
+	
+	// Write to file
+	if err := os.WriteFile(filepath, []byte(markdownContent), 0644); err != nil {
+		return fmt.Errorf("failed to write plan file: %w", err)
+	}
+	
+	fmt.Printf("📋 Plan saved to: %s\n", filepath)
+	return nil
+}
+
 // Close cleans up the runner and its resources
 func (r *Runner) Close() error {
 	return r.providerManager.CloseAll()
@@ -261,23 +301,23 @@ func (r *Runner) GeneratePlan(prompt string, ideContext interface{}) (*PlanResul
 	}
 
 	// Create a planning-specific prompt
-	planningPrompt := fmt.Sprintf(`Please analyze the following request and create a detailed plan:
+	planningPrompt := fmt.Sprintf(`Please analyze the following request and create a detailed implementation plan:
 
 Request: %s
 
 Please provide a structured plan with:
-1. Target file analysis
-2. Step-by-step implementation plan
-3. Confidence level (0-1)
-4. Reasoning for the approach
+1. **Analysis**: What needs to be done and why
+2. **Implementation Steps**: Detailed step-by-step approach
+3. **Files/Components**: What files or components will be affected
+4. **Testing Strategy**: How to verify the implementation
 
-Format your response as a clear, structured plan.`, prompt)
+Format your response as a clear, structured markdown plan that could be saved to a file.`, prompt)
 
 	// Set up options for the provider
 	opts := provider.Options{
 		Temperature:  0.3, // Lower temperature for more consistent planning
 		MaxTokens:    worker.MaxTokens,
-		SystemPrompt: "You are a helpful coding assistant that creates detailed implementation plans.",
+		SystemPrompt: "You are a helpful coding assistant that creates detailed implementation plans. Always provide structured, actionable plans in markdown format.",
 		Stream:       false, // Don't stream for planning
 	}
 
@@ -295,14 +335,18 @@ Format your response as a clear, structured plan.`, prompt)
 		return nil, collector.Error
 	}
 
-	// Parse the response into a PlanResult
-	// For now, create a simple plan structure
+	// Save the plan to a markdown file
+	if err := r.savePlanToFile(prompt, collector.Content); err != nil {
+		// Log the error but don't fail the planning process
+		fmt.Printf("Warning: Could not save plan to file: %v\n", err)
+	}
+
+	// Create a structured plan result
 	plan := &PlanResult{
 		TargetFile:   "based on context", // This could be enhanced to use ideContext
 		Steps:        []PlanStep{
-			{Number: 1, Title: "Analyze requirements", Type: PlanStepRead},
-			{Number: 2, Title: "Implement solution", Type: PlanStepUpdate},
-			{Number: 3, Title: "Test changes", Type: PlanStepRead},
+			{Number: 1, Title: "Analyze and understand requirements", Type: PlanStepRead},
+			{Number: 2, Title: "Implement the solution", Type: PlanStepUpdate},
 		},
 		SelectedPlan: prov.GetModel(),
 		Confidence:   0.85,
