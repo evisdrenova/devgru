@@ -77,4 +77,5 @@ type PlanResult struct {
 	SelectedPlan string     `json:"selected_plan"`
 	Confidence   float64    `json:"confidence"`
 	Reasoning    string     `json:"reasoning"`
+	Todos        []string   `json:"todos,omitempty"`
 }

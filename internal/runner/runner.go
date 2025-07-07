@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/evisdrenova/devgru/internal/config"
+	"github.com/evisdrenova/devgru/internal/ide"
 	"github.com/evisdrenova/devgru/internal/provider"
 	"github.com/evisdrenova/devgru/internal/provider/factories"
 )
@@ -300,18 +303,34 @@ func (r *Runner) GeneratePlan(prompt string, ideContext interface{}) (*PlanResul
 		return nil, fmt.Errorf("failed to get provider %s: %w", worker.Provider, err)
 	}
 
-	// Create a planning-specific prompt
-	planningPrompt := fmt.Sprintf(`Please analyze the following request and create a detailed implementation plan:
+	// Build comprehensive context
+	contextInfo := r.buildProjectContext(ideContext)
 
-Request: %s
+	// Create a planning-specific prompt with project context
+	planningPrompt := fmt.Sprintf(`Please analyze the following request and create a comprehensive implementation plan:
 
-Please provide a structured plan with:
-1. **Analysis**: What needs to be done and why
+## Request
+%s
+
+## Project Context
+%s
+
+## Instructions
+Create a detailed implementation plan with:
+1. **Analysis**: What needs to be done and why (considering current project state)
 2. **Implementation Steps**: Detailed step-by-step approach
 3. **Files/Components**: What files or components will be affected
 4. **Testing Strategy**: How to verify the implementation
+5. **Action Items**: A numbered list of specific todos that need to be completed
 
-Format your response as a clear, structured markdown plan that could be saved to a file.`, prompt)
+## Important Requirements
+- Consider the current project structure and files
+- Take into account any existing code, errors, or diagnostics
+- If modifying existing files, explain what changes are needed and why
+- End your response with a clear "## Action Items" section containing specific, actionable todos
+- Each action item should be a single, concrete task that can be completed
+
+Format your response as a clear, structured markdown plan.`, prompt, contextInfo)
 
 	// Set up options for the provider
 	opts := provider.Options{
@@ -335,25 +354,193 @@ Format your response as a clear, structured markdown plan that could be saved to
 		return nil, collector.Error
 	}
 
+	// Extract todos from the generated plan
+	todos := r.extractTodosFromPlan(collector.Content)
+
 	// Save the plan to a markdown file
 	if err := r.savePlanToFile(prompt, collector.Content); err != nil {
 		// Log the error but don't fail the planning process
 		fmt.Printf("Warning: Could not save plan to file: %v\n", err)
 	}
 
+	// Create enhanced steps from todos
+	planSteps := r.convertTodosToSteps(todos)
+
 	// Create a structured plan result
 	plan := &PlanResult{
-		TargetFile: "based on context",
-		Steps: []PlanStep{
-			{Number: 1, Title: "Analyze and understand requirements", Type: PlanStepRead},
-			{Number: 2, Title: "Implement the solution", Type: PlanStepUpdate},
-		},
+		TargetFile:   r.extractTargetFileFromContext(ideContext),
+		Steps:        planSteps,
 		SelectedPlan: prov.GetModel(),
 		Confidence:   0.85,
 		Reasoning:    collector.Content,
+		Todos:        todos, // Add todos to the plan result
 	}
 
 	return plan, nil
+}
+
+// buildProjectContext creates a comprehensive context string from IDE information
+func (r *Runner) buildProjectContext(ideContext interface{}) string {
+	if ideContext == nil {
+		return "No project context available."
+	}
+
+	var contextParts []string
+
+	// Type assertion to access IDE context fields
+	if ctx, ok := ideContext.(*ide.IDEContext); ok {
+		// Active file information
+		if ctx.ActiveFile != "" {
+			contextParts = append(contextParts, fmt.Sprintf("**Active File**: %s", ctx.ActiveFile))
+		}
+
+		// Selected text information
+		if ctx.Selection != nil && ctx.Selection.Text != "" {
+			contextParts = append(contextParts, fmt.Sprintf("**Selected Code** (lines %d-%d):\n```%s\n%s\n```", 
+				ctx.Selection.StartLine, ctx.Selection.EndLine, ctx.Selection.Language, ctx.Selection.Text))
+		}
+
+		// Workspace information
+		if ctx.WorkspaceRoot != "" {
+			contextParts = append(contextParts, fmt.Sprintf("**Workspace**: %s", ctx.WorkspaceRoot))
+		}
+
+		// Open files
+		if len(ctx.OpenFiles) > 0 {
+			openFilesStr := strings.Join(ctx.OpenFiles, ", ")
+			if len(openFilesStr) > 200 { // Truncate if too long
+				openFilesStr = openFilesStr[:200] + "..."
+			}
+			contextParts = append(contextParts, fmt.Sprintf("**Open Files**: %s", openFilesStr))
+		}
+
+		// Diagnostics (errors/warnings)
+		if len(ctx.Diagnostics) > 0 {
+			var diagStrings []string
+			for i, diag := range ctx.Diagnostics {
+				if i >= 5 { // Limit to first 5 diagnostics
+					diagStrings = append(diagStrings, "...")
+					break
+				}
+				diagStrings = append(diagStrings, fmt.Sprintf("- %s:%d: [%s] %s", 
+					diag.File, diag.Line, diag.Severity, diag.Message))
+			}
+			if len(diagStrings) > 0 {
+				contextParts = append(contextParts, fmt.Sprintf("**Current Issues**:\n%s", strings.Join(diagStrings, "\n")))
+			}
+		}
+	}
+
+	if len(contextParts) == 0 {
+		return "No specific project context available."
+	}
+
+	return strings.Join(contextParts, "\n\n")
+}
+
+// extractTodosFromPlan extracts action items from the generated plan
+func (r *Runner) extractTodosFromPlan(planContent string) []string {
+	var todos []string
+	
+	// Look for "Action Items" or "TODO" sections
+	lines := strings.Split(planContent, "\n")
+	inTodoSection := false
+	
+	// Regex patterns to match todo items
+	todoSectionPattern := regexp.MustCompile(`(?i)^##?\s*(action\s+items?|todos?|tasks?)`)
+	listItemPattern := regexp.MustCompile(`^\s*(\d+\.|[-*+])\s+(.+)$`)
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		
+		// Check if we're entering a todo section
+		if todoSectionPattern.MatchString(line) {
+			inTodoSection = true
+			continue
+		}
+		
+		// Check if we're leaving the todo section (new heading)
+		if inTodoSection && strings.HasPrefix(line, "#") && !todoSectionPattern.MatchString(line) {
+			inTodoSection = false
+			continue
+		}
+		
+		// Extract todo items
+		if inTodoSection && listItemPattern.MatchString(line) {
+			matches := listItemPattern.FindStringSubmatch(line)
+			if len(matches) > 2 {
+				todo := strings.TrimSpace(matches[2])
+				if todo != "" {
+					todos = append(todos, todo)
+				}
+			}
+		}
+	}
+	
+	// If no explicit todo section found, look for numbered lists throughout the document
+	if len(todos) == 0 {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if matches := regexp.MustCompile(`^\d+\.\s+(.+)$`).FindStringSubmatch(line); len(matches) > 1 {
+				todo := strings.TrimSpace(matches[1])
+				if todo != "" && !strings.Contains(strings.ToLower(todo), "analysis") {
+					todos = append(todos, todo)
+				}
+			}
+		}
+	}
+	
+	return todos
+}
+
+// convertTodosToSteps converts extracted todos into PlanStep format
+func (r *Runner) convertTodosToSteps(todos []string) []PlanStep {
+	steps := make([]PlanStep, len(todos))
+	
+	for i, todo := range todos {
+		stepType := PlanStepUpdate // Default type
+		
+		// Determine step type based on todo content
+		todoLower := strings.ToLower(todo)
+		if strings.Contains(todoLower, "read") || strings.Contains(todoLower, "analyze") || strings.Contains(todoLower, "review") {
+			stepType = PlanStepRead
+		} else if strings.Contains(todoLower, "create") || strings.Contains(todoLower, "add") || strings.Contains(todoLower, "new") {
+			stepType = PlanStepCreate
+		} else if strings.Contains(todoLower, "delete") || strings.Contains(todoLower, "remove") {
+			stepType = PlanStepDelete
+		}
+		
+		steps[i] = PlanStep{
+			Number: i + 1,
+			Title:  todo,
+			Type:   stepType,
+		}
+	}
+	
+	// If no todos found, provide default steps
+	if len(steps) == 0 {
+		steps = []PlanStep{
+			{Number: 1, Title: "Analyze and understand requirements", Type: PlanStepRead},
+			{Number: 2, Title: "Implement the solution", Type: PlanStepUpdate},
+		}
+	}
+	
+	return steps
+}
+
+// extractTargetFileFromContext attempts to determine the target file from context
+func (r *Runner) extractTargetFileFromContext(ideContext interface{}) string {
+	if ideContext == nil {
+		return "based on context"
+	}
+
+	if ctx, ok := ideContext.(*ide.IDEContext); ok {
+		if ctx.ActiveFile != "" {
+			return ctx.ActiveFile
+		}
+	}
+	
+	return "based on context"
 }
 
 // ExecutePlan executes the given plan using the configured workers

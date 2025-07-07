@@ -504,6 +504,14 @@ func (m *InteractiveModel) formatPlanResult(plan *runner.PlanResult) string {
 		}
 	}
 
+	// Add todos section if available
+	if len(plan.Todos) > 0 {
+		content += "\n\n## Action Items"
+		for i, todo := range plan.Todos {
+			content += fmt.Sprintf("\n%d. %s", i+1, todo)
+		}
+	}
+
 	content += fmt.Sprintf("\n\nConfidence: %.1f%%", plan.Confidence*100)
 	content += "\n\n⚡ Executing plan..."
 
